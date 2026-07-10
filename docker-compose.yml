@@ -34,7 +34,7 @@ services:
       - openbao-data:/openbao/data
 
   refresher:
-    image: ghcr.io/loneexile/oauth-token-refresher:latest
+    build: .
     ports:
       - "8080:8080"
     environment:

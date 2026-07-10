@@ -1,0 +1,42 @@
+# Optional: build the container image with rootless BuildKit and push it to a
+# registry. Nothing registry-specific is hardcoded — set these CI/CD variables
+# in your own GitLab project:
+#   REGISTRY_IMAGE  e.g. registry.example.com/you/oauth-token-refresher
+#   REGISTRY_USER   registry username / robot account
+#   REGISTRY_PASS   registry password / token   (mask this one)
+#
+# GitHub users: ignore this file — build locally with `docker build .` or the
+# provided docker-compose.yml. This pipeline only runs on GitLab.
+
+stages:
+  - build
+
+build-image:
+  stage: build
+  rules:
+    - if: '$REGISTRY_IMAGE == null'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG'
+  image:
+    name: moby/buildkit:v0.31.1-rootless
+    entrypoint: [""]
+  variables:
+    BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
+    DOCKER_CONFIG: /home/user/.docker
+  script:
+    - mkdir -p "$DOCKER_CONFIG"
+    - |
+      REGISTRY="${REGISTRY_IMAGE%%/*}"
+      AUTH=$(printf '%s' "$REGISTRY_USER:$REGISTRY_PASS" | base64 | tr -d '\n')
+      cat > "$DOCKER_CONFIG/config.json" <<EOF
+      {"auths":{"$REGISTRY":{"auth":"$AUTH"}}}
+      EOF
+    - |
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 \
+        --local context="$CI_PROJECT_DIR" \
+        --local dockerfile="$CI_PROJECT_DIR" \
+        --opt filename=Dockerfile \
+        --opt build-arg:VERSION="$CI_COMMIT_SHORT_SHA" \
+        --output type=image,\"name=$REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA,$REGISTRY_IMAGE:latest\",push=true

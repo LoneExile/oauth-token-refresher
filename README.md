@@ -72,12 +72,13 @@ both) by setting the flags below.
 ### Docker
 
 ```bash
-docker run -d --name oauth-refresh \
+docker build -t oauth-token-refresher .
+docker run -d --name oauth-token-refresher \
   -e OPENBAO_ADDR=http://your-vault:8200 \
   -e OPENBAO_TOKEN=s.your-token \
   -e ANTHROPIC_ENABLED=true \
   -p 8080:8080 \
-  ghcr.io/loneexile/oauth-token-refresher:latest
+  oauth-token-refresher
 ```
 
 ### Seed OpenBao manually (optional)
