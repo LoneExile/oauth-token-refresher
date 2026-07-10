@@ -1,0 +1,56 @@
+# Quick start with Docker Compose + a local OpenBao dev instance.
+# Usage:
+#   1. Start OpenBao: docker compose up -d openbao
+#   2. Init + unseal + enable KV:
+#      docker compose exec openbao bao operator init
+#      docker compose exec openbao bao operator unseal <key>  # ×3
+#      docker compose exec openbao bao secrets enable -path=secret kv-v2
+#   3. (Optional) seed credentials by hand — or just use the login UI in step 6:
+#      # xAI
+#      docker compose exec openbao bao kv put secret/xai/oauth \
+#        access=<JWT> refresh=<refresh> expires=<ms> base_url=https://api.x.ai/v1
+#      # Anthropic (only if ANTHROPIC_ENABLED=true below)
+#      docker compose exec openbao bao kv put secret/anthropic/oauth \
+#        access=<token> refresh=<refresh> expires=<ms> base_url=https://api.anthropic.com
+#   4. Create a token for the refresher:
+#      docker compose exec openbao bao token create -policy=root -period=768h -orphan
+#   5. Set OPENBAO_TOKEN below and start the refresher:
+#      OPENBAO_TOKEN=s.xxx docker compose up -d refresher
+#   6. Log in via the web UI at http://localhost:8080/ (device flow for xAI, paste for
+#      Anthropic) — this seeds OpenBao for you. Gate this UI (LAN-only + SSO) in production.
+#
+# Health + Prometheus metrics are on port 8080 at /healthz, /readyz, /status, /metrics.
+
+services:
+  openbao:
+    image: openbao/openbao:latest
+    ports:
+      - "8200:8200"
+    environment:
+      BAO_ADDR: http://localhost:8200
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - openbao-data:/openbao/data
+
+  refresher:
+    image: ghcr.io/loneexile/oauth-token-refresher:latest
+    ports:
+      - "8080:8080"
+    environment:
+      OPENBAO_ADDR: http://openbao:8200
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN:?set OPENBAO_TOKEN}
+      REFRESH_SKEW: 10m
+      LOOP_INTERVAL: 60s
+      # Self-service login UI is served at / by default (LOGIN_UI_ENABLED=true).
+      # Gate it (LAN-only + SSO) in production, or disable with LOGIN_UI_ENABLED: "false".
+      # xAI is managed by default (secret/xai/oauth). Disable with XAI_ENABLED=false.
+      XAI_KV_PATH: secret/xai/oauth
+      # Anthropic (Claude Pro/Max) — opt-in. Seed secret/anthropic/oauth first.
+      # ANTHROPIC_ENABLED: "true"
+      # ANTHROPIC_KV_PATH: secret/anthropic/oauth
+    depends_on:
+      - openbao
+
+volumes:
+  openbao-data:

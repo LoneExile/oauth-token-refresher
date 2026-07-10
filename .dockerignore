@@ -1,0 +1,8 @@
+.git
+.github
+.gitlab-ci.yml
+README.md
+*.md
+.gitignore
+bin/
+dist/
