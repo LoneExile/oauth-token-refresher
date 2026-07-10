@@ -114,19 +114,12 @@ func (s *Store) Snapshot() map[string]ProviderSnapshot {
 	return out
 }
 
-// Ready reports readiness: no provider has failed its very first cycle. During
-// the startup grace window (before any cycle) it returns true.
-func (s *Store) Ready() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, name := range s.order {
-		ps := s.state[name]
-		if ps.lastError != "" && ps.lastOK.IsZero() {
-			return false
-		}
-	}
-	return true
-}
+// Ready reports serving readiness. The refresher serves the login UI and
+// /metrics regardless of per-provider state, so an unseeded or forbidden
+// provider must NOT take the pod out of service — otherwise the very UI used to
+// seed it becomes unreachable. Per-provider health is exposed via /status and
+// /metrics; answering this call at all means the server is up.
+func (s *Store) Ready() bool { return true }
 
 // WritePrometheus renders the state in Prometheus text exposition format
 // (version 0.0.4). All metric families are prefixed oauth_refresh_ and labeled

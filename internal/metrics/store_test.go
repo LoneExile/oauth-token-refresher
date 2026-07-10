@@ -59,18 +59,17 @@ func TestSnapshotAndPrometheus(t *testing.T) {
 	}
 }
 
-func TestReady(t *testing.T) {
-	s := NewStore([]string{"xai"})
+func TestReadyIgnoresProviderErrors(t *testing.T) {
+	s := NewStore([]string{"xai", "anthropic"})
 	if !s.Ready() {
-		t.Error("fresh store should be ready (startup grace)")
+		t.Fatal("should be ready at startup")
 	}
-	s.Err("xai", errors.New("x"))
-	if s.Ready() {
-		t.Error("first-cycle failure => not ready")
-	}
-	s.OK("xai", time.Now().Add(time.Hour), false)
+	// xAI healthy, anthropic failing (unseeded / forbidden) — pod stays ready so
+	// the login UI used to seed anthropic remains reachable.
+	s.OK("xai", time.Now().Add(time.Hour), true)
+	s.Err("anthropic", errors.New("permission denied"))
 	if !s.Ready() {
-		t.Error("after a success => ready")
+		t.Fatal("one failing provider must not take the pod out of service")
 	}
 }
 
