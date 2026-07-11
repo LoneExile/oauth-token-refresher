@@ -6,15 +6,21 @@ import (
 	"net/http"
 )
 
-// Register mounts the login UI on mux:
+// Register mounts the login UI + account management on mux:
 //
-//	GET  /                     dashboard
-//	POST /login/{provider}     start a login
-//	GET  /session/{id}         login progress / paste form
-//	POST /session/{id}/code    submit a pasted authorization code
+//	GET  /                                    dashboard (providers → accounts)
+//	POST /login/{provider}                    add a NEW account (form field: label)
+//	POST /account/{provider}/{id}/relogin     re-login an existing account
+//	POST /account/{provider}/{id}/activate    make an account the active one
+//	POST /account/{provider}/{id}/remove      delete an account
+//	GET  /session/{id}                         login progress / paste form
+//	POST /session/{id}/code                    submit a pasted authorization code
 func Register(mux *http.ServeMux, m *Manager) {
 	mux.HandleFunc("GET /{$}", m.handleDashboard)
 	mux.HandleFunc("POST /login/{provider}", m.handleStart)
+	mux.HandleFunc("POST /account/{provider}/{id}/relogin", m.handleRelogin)
+	mux.HandleFunc("POST /account/{provider}/{id}/activate", m.handleActivate)
+	mux.HandleFunc("POST /account/{provider}/{id}/remove", m.handleRemove)
 	mux.HandleFunc("GET /session/{id}", m.handleSession)
 	mux.HandleFunc("POST /session/{id}/code", m.handleCode)
 }
@@ -24,12 +30,37 @@ func (m *Manager) handleDashboard(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (m *Manager) handleStart(w http.ResponseWriter, r *http.Request) {
-	sess, err := m.StartLogin(r.PathValue("provider"))
+	sess, err := m.StartLogin(r.PathValue("provider"), "", r.FormValue("label"))
 	if err != nil {
 		renderMessage(w, "Could not start login: "+err.Error(), true, http.StatusBadGateway)
 		return
 	}
 	http.Redirect(w, r, "/session/"+sess.ID, http.StatusSeeOther)
+}
+
+func (m *Manager) handleRelogin(w http.ResponseWriter, r *http.Request) {
+	sess, err := m.StartLogin(r.PathValue("provider"), r.PathValue("id"), "")
+	if err != nil {
+		renderMessage(w, "Could not start re-login: "+err.Error(), true, http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, "/session/"+sess.ID, http.StatusSeeOther)
+}
+
+func (m *Manager) handleActivate(w http.ResponseWriter, r *http.Request) {
+	if err := m.Activate(r.PathValue("provider"), r.PathValue("id")); err != nil {
+		renderMessage(w, "Could not switch account: "+err.Error(), true, http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (m *Manager) handleRemove(w http.ResponseWriter, r *http.Request) {
+	if err := m.RemoveAccount(r.PathValue("provider"), r.PathValue("id")); err != nil {
+		renderMessage(w, "Could not remove account: "+err.Error(), true, http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (m *Manager) handleSession(w http.ResponseWriter, r *http.Request) {
