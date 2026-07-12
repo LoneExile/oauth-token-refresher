@@ -81,6 +81,7 @@ form.add input { flex: 1; }
         {{else if $a.TokenValid}}
           <span class="ok">&#9679; valid</span> <span class="muted">until {{$a.Expiry.UTC.Format "2006-01-02 15:04 UTC"}}</span><br>
           {{if $a.Usage.Err}}<span class="bad">&#9888; {{$a.Usage.Err}}</span>
+          {{else if $a.Usage.Window7dUtil}}<span class="muted">7d: {{$a.Usage.Window7dUtil}} used</span>{{if $a.Usage.Window5hUtil}}<span class="muted"> &middot; 5h: {{$a.Usage.Window5hUtil}} used</span>{{end}}{{if $a.Usage.Status}}<span class="muted"> &middot; {{$a.Usage.Status}}</span>{{end}}
           {{else if $a.Usage.TokensRemaining}}<span class="muted">tokens: {{$a.Usage.TokensRemaining}} / {{$a.Usage.TokensLimit}} remaining</span>
           {{else if $a.Usage.RequestsRemaining}}<span class="muted">requests: {{$a.Usage.RequestsRemaining}} / {{$a.Usage.RequestsLimit}} remaining</span>
           {{end}}

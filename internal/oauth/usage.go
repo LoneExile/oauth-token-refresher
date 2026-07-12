@@ -10,15 +10,23 @@ import (
 )
 
 // Usage is the rate-limit usage snapshot from a lightweight API probe.
-// Values come from the anthropic-ratelimit-* / x-ratelimit-* response headers.
+// Anthropic OAuth subscription tokens return utilization-based headers
+// (anthropic-ratelimit-unified-5h-utilization, -7d-utilization) while API-key
+// providers return remaining/limit counts. Both are surfaced here.
 type Usage struct {
-	// RequestsRemaining / TokensRemaining are the most useful "how much is left"
-	// numbers. Empty string means the header was absent (provider doesn't report it).
+	// API-key style: remaining/limit counts (xAI, Anthropic API keys)
 	RequestsRemaining string
 	RequestsLimit     string
 	TokensRemaining   string
 	TokensLimit       string
-	// ResetAt is when the current rate-limit window resets (RFC 3339 from the API).
+	// Anthropic OAuth subscription style: utilization 0.0-1.0
+	Window5hUtil  string // anthropic-ratelimit-unified-5h-utilization
+	Window7dUtil  string // anthropic-ratelimit-unified-7d-utilization
+	Window5hReset string // unix timestamp
+	Window7dReset string // unix timestamp
+	// Status: "allowed", "allowed_warning", "blocked"
+	Status string
+	// ResetAt is when the current rate-limit window resets.
 	ResetAt string
 	// Err is non-empty if the probe failed (e.g. 429, 401, network error).
 	Err string
@@ -31,14 +39,14 @@ type UsageProber interface {
 	ProbeUsage(ctx context.Context, accessToken string) Usage
 }
 
-// ProbeUsage is a no-op prober for providers that don't support usage probing.
-// Returns an empty Usage (no headers, no error).
+// NoOpProber is a no-op prober for providers that don't support usage probing.
 type NoOpProber struct{}
 
 func (NoOpProber) ProbeUsage(context.Context, string) Usage { return Usage{} }
 
 // AnthropicProber probes the Anthropic Messages API for rate-limit headers.
-// Uses a minimal request: model=claude-haiku-4-5, max_tokens=1, a 1-word prompt.
+// OAuth subscription tokens (sk-ant-oat*) return anthropic-ratelimit-unified-*
+// headers with 5h/7d utilization windows.
 type AnthropicProber struct {
 	BaseURL string // e.g. "https://api.anthropic.com"
 }
@@ -49,7 +57,7 @@ type XAIProber struct {
 }
 
 // ProbeUsage makes a minimal Anthropic Messages API call and reads the
-// anthropic-ratelimit-* headers from the response.
+// anthropic-ratelimit-unified-* headers from the response.
 func (p AnthropicProber) ProbeUsage(ctx context.Context, accessToken string) Usage {
 	base := p.BaseURL
 	if base == "" {
@@ -82,7 +90,7 @@ func (p XAIProber) ProbeUsage(ctx context.Context, accessToken string) Usage {
 	if base == "" {
 		base = "https://api.x.ai"
 	}
-	body := `{"model":"grok-3-mini","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`
+	body := `{"model":"grok-4.1-fast","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`
 	req, err := http.NewRequestWithContext(ctx, "POST", base+"/v1/chat/completions", strings.NewReader(body))
 	if err != nil {
 		return Usage{Err: err.Error()}
@@ -101,6 +109,9 @@ func (p XAIProber) ProbeUsage(ctx context.Context, accessToken string) Usage {
 }
 
 // parseAnthropicHeaders extracts rate-limit values from Anthropic response headers.
+// OAuth subscription tokens return anthropic-ratelimit-unified-* headers with
+// utilization (0.0-1.0) for 5h and 7d windows. API keys return
+// anthropic-ratelimit-tokens-remaining etc.
 func parseAnthropicHeaders(h http.Header, status int) Usage {
 	u := Usage{}
 	if status == 429 {
@@ -113,11 +124,18 @@ func parseAnthropicHeaders(h http.Header, status int) Usage {
 		u.Err = fmt.Sprintf("HTTP %d", status)
 		return u
 	}
+	// OAuth subscription headers (unified-*)
+	u.Status = h.Get("anthropic-ratelimit-unified-status")
+	u.Window5hUtil = h.Get("anthropic-ratelimit-unified-5h-utilization")
+	u.Window7dUtil = h.Get("anthropic-ratelimit-unified-7d-utilization")
+	u.Window5hReset = h.Get("anthropic-ratelimit-unified-5h-reset")
+	u.Window7dReset = h.Get("anthropic-ratelimit-unified-7d-reset")
+	u.ResetAt = h.Get("anthropic-ratelimit-unified-reset")
+	// API-key style headers (if present, fill those too)
 	u.RequestsRemaining = h.Get("anthropic-ratelimit-requests-remaining")
 	u.RequestsLimit = h.Get("anthropic-ratelimit-requests-limit")
 	u.TokensRemaining = h.Get("anthropic-ratelimit-tokens-remaining")
 	u.TokensLimit = h.Get("anthropic-ratelimit-tokens-limit")
-	u.ResetAt = h.Get("anthropic-ratelimit-tokens-reset")
 	return u
 }
 
@@ -133,7 +151,6 @@ func parseXAIHeaders(h http.Header, status int) Usage {
 		u.Err = fmt.Sprintf("HTTP %d", status)
 		return u
 	}
-	// xAI uses x-ratelimit-* headers
 	u.RequestsRemaining = h.Get("x-ratelimit-remaining-requests")
 	u.RequestsLimit = h.Get("x-ratelimit-limit-requests")
 	u.TokensRemaining = h.Get("x-ratelimit-remaining-tokens")
@@ -142,21 +159,17 @@ func parseXAIHeaders(h http.Header, status int) Usage {
 	return u
 }
 
-// UsagePercent computes a 0-100 integer for "how much is left" from the
-// remaining and limit strings. Returns -1 if either is empty or unparseable.
-func UsagePercent(remaining, limit string) int {
-	if remaining == "" || limit == "" {
+// UtilPercent converts a utilization string (0.0-1.0) to a 0-100 integer
+// representing how much of the quota has been USED. Returns -1 if unparseable.
+func UtilPercent(util string) int {
+	if util == "" {
 		return -1
 	}
-	r, err1 := strconv.ParseFloat(remaining, 64)
-	l, err2 := strconv.ParseFloat(limit, 64)
-	if err1 != nil || err2 != nil || l <= 0 {
+	f, err := strconv.ParseFloat(util, 64)
+	if err != nil || f < 0 {
 		return -1
 	}
-	pct := int(r / l * 100)
-	if pct < 0 {
-		pct = 0
-	}
+	pct := int(f * 100)
 	if pct > 100 {
 		pct = 100
 	}
