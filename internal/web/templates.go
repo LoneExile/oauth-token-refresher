@@ -1,12 +1,68 @@
 package web
 
-import "html/template"
+import (
+	"fmt"
+	"html/template"
+)
 
-var tmpl = template.Must(template.New("web").Parse(pages))
+var tmpl = template.Must(template.New("web").Funcs(template.FuncMap{
+	"utilPct":   utilPct,
+	"utilColor": utilColor,
+	"utilBar":   utilBar,
+}).Parse(pages))
 
 type layoutData struct {
 	Body    template.HTML
 	Refresh int // seconds; 0 disables the meta-refresh
+}
+
+// utilPct converts a "0.99" string to "99".
+func utilPct(s string) string {
+	if s == "" {
+		return ""
+	}
+	var f float64
+	if _, err := fmt.Sscanf(s, "%f", &f); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%.0f", f*100)
+}
+
+// utilColor returns a CSS color class based on utilization percentage.
+func utilColor(s string) string {
+	if s == "" {
+		return "muted"
+	}
+	var f float64
+	if _, err := fmt.Sscanf(s, "%f", &f); err != nil {
+		return "muted"
+	}
+	switch {
+	case f >= 0.9:
+		return "quota-crit"
+	case f >= 0.75:
+		return "quota-warn"
+	case f >= 0.4:
+		return "quota-mid"
+	default:
+		return "quota-ok"
+	}
+}
+
+// utilBar returns the width percentage for a utilization bar.
+func utilBar(s string) string {
+	if s == "" {
+		return "0"
+	}
+	var f float64
+	if _, err := fmt.Sscanf(s, "%f", &f); err != nil {
+		return "0"
+	}
+	pct := f * 100
+	if pct > 100 {
+		pct = 100
+	}
+	return fmt.Sprintf("%.0f", pct)
 }
 
 const pages = `
@@ -17,141 +73,247 @@ const pages = `
 {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 <title>OAuth Refresh</title>
 <style>
-:root { color-scheme: light dark; }
-* { box-sizing: border-box; }
-body { margin: 0; font: 15px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
-  background: #0f1115; color: #e6e6e6; }
-header { padding: 20px 24px; border-bottom: 1px solid #262a33; }
-header h1 { margin: 0 0 4px; font-size: 18px; }
-.warn { margin: 0; font-size: 12px; color: #f0b429; }
-main { max-width: 820px; margin: 0 auto; padding: 24px; }
-.card { background: #171a21; border: 1px solid #262a33; border-radius: 10px;
-  padding: 16px 18px; margin: 0 0 14px; }
-.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.name { font-weight: 600; font-size: 16px; }
-.kind { font-size: 12px; color: #8b93a1; margin-left: 8px; font-weight: 400; }
-.status { font-size: 13px; }
-.ok { color: #34d399; } .bad { color: #f87171; } .muted { color: #8b93a1; }
-.btn { display: inline-block; background: #2563eb; color: #fff; border: 0;
-  border-radius: 8px; padding: 9px 16px; font-size: 14px; cursor: pointer; text-decoration: none; }
-.btn:hover { background: #1d4ed8; }
-.btn.secondary { background: #2a2f3a; }
-.btn.secondary:hover { background: #343a47; }
-.btn.small { padding: 5px 10px; font-size: 12px; }
-.btn.danger { background: #7f1d1d; }
-.btn.danger:hover { background: #991b1b; }
+:root {
+  color-scheme: dark;
+  --bg: oklch(0.17 0.008 250);
+  --surface: oklch(0.21 0.010 250);
+  --surface-hi: oklch(0.25 0.012 250);
+  --border: oklch(0.30 0.010 250);
+  --text: oklch(0.90 0.005 250);
+  --text-dim: oklch(0.62 0.008 250);
+  --text-faint: oklch(0.48 0.006 250);
+  --accent: oklch(0.62 0.19 255);
+  --accent-hi: oklch(0.56 0.22 255);
+  --green: oklch(0.72 0.17 155);
+  --amber: oklch(0.75 0.15 85);
+  --red: oklch(0.65 0.20 25);
+  --bar-bg: oklch(0.14 0.006 250);
+}
+* { box-sizing: border-box; margin: 0; }
+body {
+  font: 14px/1.6 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg); color: var(--text);
+  display: flex; flex-direction: column; min-height: 100vh;
+}
+header {
+  padding: 18px 28px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+}
+header h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.warn { font-size: 12px; color: var(--amber); }
+main { flex: 1; max-width: 720px; width: 100%; margin: 0 auto; padding: 28px 24px 48px; }
+
+.provider { margin-bottom: 28px; }
+.provider-head {
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; padding: 0 4px;
+}
+.provider-name { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--text-dim); }
+.provider-kind { font-size: 12px; color: var(--text-faint); }
+
+.acct {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px 16px; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 14px;
+}
+.acct.active { border-color: oklch(0.40 0.10 155); background: oklch(0.22 0.015 155); }
+
+.acct-info { flex: 1; min-width: 0; }
+.acct-label { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+.acct-badge {
+  display: inline-block; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; padding: 1px 7px; border-radius: 999px;
+  margin-left: 6px; vertical-align: 1px;
+}
+.acct-badge.active { background: oklch(0.30 0.08 155); color: var(--green); }
+
+.token-status { font-size: 12px; margin-bottom: 6px; }
+.token-status .ok { color: var(--green); }
+.token-status .bad { color: var(--red); }
+.token-status .muted { color: var(--text-faint); }
+.token-status .dot { font-size: 8px; vertical-align: 2px; }
+
+.quota { margin-top: 4px; }
+.quota-row { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+.quota-label { font-size: 11px; color: var(--text-faint); width: 32px; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.03em; }
+.quota-bar { flex: 1; height: 4px; background: var(--bar-bg); border-radius: 2px; overflow: hidden; }
+.quota-fill { height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+.quota-ok { background: var(--green); }
+.quota-mid { background: var(--amber); }
+.quota-warn { background: oklch(0.70 0.16 60); }
+.quota-crit { background: var(--red); }
+.quota-pct { font-size: 11px; width: 34px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.quota-crit-text { color: var(--red); }
+.quota-warn-text { color: oklch(0.72 0.14 60); }
+.quota-ok-text { color: var(--text-faint); }
+.quota-err { font-size: 12px; color: var(--red); margin-top: 2px; }
+.quota-status { font-size: 11px; color: var(--amber); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.03em; }
+
+.acct-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.btn {
+  display: inline-block; border: 0; border-radius: 6px; padding: 6px 12px;
+  font-size: 12px; font-weight: 500; cursor: pointer; text-decoration: none;
+  text-align: center; white-space: nowrap;
+}
+.btn-primary { background: var(--accent); color: oklch(0.98 0.005 250); }
+.btn-primary:hover { background: var(--accent-hi); }
+.btn-secondary { background: var(--surface-hi); color: var(--text-dim); }
+.btn-secondary:hover { background: oklch(0.30 0.010 250); color: var(--text); }
+.btn-danger { background: oklch(0.25 0.04 25); color: oklch(0.70 0.12 25); }
+.btn-danger:hover { background: oklch(0.30 0.06 25); color: oklch(0.85 0.10 25); }
+
+.add-acct { display: flex; gap: 6px; margin-top: 8px; padding: 0 4px; }
+.add-acct input {
+  flex: 1; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font: inherit; font-size: 13px;
+}
+.add-acct input::placeholder { color: var(--text-faint); }
+.add-acct .btn { padding: 8px 14px; }
+
 code, .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.usercode { font-size: 30px; letter-spacing: 4px; font-weight: 700; margin: 12px 0;
-  padding: 12px; background: #0f1115; border: 1px dashed #3a4150; border-radius: 8px; text-align: center; }
-input[type=text] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #3a4150;
-  background: #0f1115; color: #e6e6e6; font-family: ui-monospace, monospace; }
-label { display: block; font-size: 13px; color: #8b93a1; margin: 12px 0 6px; }
-a { color: #60a5fa; }
+.usercode { font-size: 28px; letter-spacing: 4px; font-weight: 700; margin: 12px 0;
+  padding: 14px; background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; text-align: center; }
+input[type=text] {
+  width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-family: ui-monospace, monospace;
+}
+label { display: block; font-size: 13px; color: var(--text-dim); margin: 12px 0 6px; }
+a { color: oklch(0.68 0.12 255); }
 ol { padding-left: 20px; } li { margin: 6px 0; }
-.pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; margin-left: 8px; }
-.pill.ok { background: #06331f; color: #34d399; } .pill.bad { background: #3a1414; } .pill.pending { background: #33280a; color: #f0b429; }
-table.accounts { width: 100%; border-collapse: collapse; margin: 10px 0 4px; }
-table.accounts td { padding: 9px 6px; border-top: 1px solid #262a33; vertical-align: middle; }
-.acct-name { font-weight: 600; }
-.actions { text-align: right; white-space: nowrap; }
-.actions form { display: inline-block; margin-left: 6px; }
-form.add { display: flex; gap: 8px; margin-top: 12px; }
-form.add input { flex: 1; }
+
+.session-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+.session-head { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+.session-head .kind { font-size: 12px; color: var(--text-faint); font-weight: 400; margin-left: 8px; }
+.msg { padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.msg p { font-size: 14px; }
+.msg .muted { color: var(--text-dim); }
+.msg .bad { color: var(--red); }
 </style>
 </head><body>
 <header>
-  <h1>OAuth Refresh &mdash; self-service login</h1>
-  <p class="warn">Sensitive: this UI mints provider tokens and writes them to OpenBao. Keep it behind SSO.</p>
+  <h1>OAuth Refresh</h1>
+  <span class="warn">Sensitive: mints provider tokens, writes to OpenBao. Keep behind SSO.</span>
 </header>
 <main>{{.Body}}</main>
 </body></html>{{end}}
 
 {{define "dashboard"}}
 {{range $p := .}}
-<div class="card">
-  <div class="row"><div><span class="name">{{$p.Name}}</span><span class="kind">{{$p.Kind}} flow</span></div></div>
+<div class="provider">
+  <div class="provider-head">
+    <span class="provider-name">{{$p.Name}}</span>
+    <span class="provider-kind">{{$p.Kind}} flow</span>
+  </div>
   {{if $p.Accounts}}
-  <table class="accounts">
     {{range $a := $p.Accounts}}
-    <tr>
-      <td class="acct-name">{{$a.Label}}{{if $a.Active}}<span class="pill ok">active</span>{{end}}</td>
-      <td class="status">
-        {{if $a.Err}}<span class="bad">{{$a.Err}}</span>
-        {{else if not $a.Seeded}}<span class="muted">not logged in</span>
-        {{else if $a.TokenValid}}
-          <span class="ok">&#9679; valid</span> <span class="muted">until {{$a.Expiry.UTC.Format "2006-01-02 15:04 UTC"}}</span><br>
-          {{if $a.Usage.Err}}<span class="bad">&#9888; {{$a.Usage.Err}}</span>
-          {{else if $a.Usage.Window7dUtil}}<span class="muted">7d: {{$a.Usage.Window7dUtil}} used</span>{{if $a.Usage.Window5hUtil}}<span class="muted"> &middot; 5h: {{$a.Usage.Window5hUtil}} used</span>{{end}}{{if $a.Usage.Status}}<span class="muted"> &middot; {{$a.Usage.Status}}</span>{{end}}
-          {{else if $a.Usage.TokensRemaining}}<span class="muted">tokens: {{$a.Usage.TokensRemaining}} / {{$a.Usage.TokensLimit}} remaining</span>
-          {{else if $a.Usage.RequestsRemaining}}<span class="muted">requests: {{$a.Usage.RequestsRemaining}} / {{$a.Usage.RequestsLimit}} remaining</span>
+    <div class="acct{{if $a.Active}} active{{end}}">
+      <div class="acct-info">
+        <div class="acct-label">{{$a.Label}}{{if $a.Active}}<span class="acct-badge active">active</span>{{end}}</div>
+        <div class="token-status">
+          {{if $a.Err}}<span class="bad">{{$a.Err}}</span>
+          {{else if not $a.Seeded}}<span class="muted">not logged in</span>
+          {{else if $a.TokenValid}}
+            <span class="ok">&#9679;</span> <span class="muted">valid until {{$a.Expiry.UTC.Format "Jan 02 15:04 UTC"}}</span>
+          {{else}}<span class="bad">&#9679; expired</span>{{end}}
+        </div>
+        {{if $a.TokenValid}}
+        <div class="quota">
+          {{if $a.Usage.Err}}
+            <div class="quota-err">&#9888; {{$a.Usage.Err}}</div>
+          {{else if $a.Usage.Window7dUtil}}
+            <div class="quota-row">
+              <span class="quota-label">7d</span>
+              <div class="quota-bar"><div class="quota-fill {{utilColor $a.Usage.Window7dUtil}}" style="width: {{utilBar $a.Usage.Window7dUtil}}%"></div></div>
+              <span class="quota-pct {{utilColor $a.Usage.Window7dUtil}}-text">{{utilPct $a.Usage.Window7dUtil}}%</span>
+            </div>
+            {{if $a.Usage.Window5hUtil}}
+            <div class="quota-row">
+              <span class="quota-label">5h</span>
+              <div class="quota-bar"><div class="quota-fill {{utilColor $a.Usage.Window5hUtil}}" style="width: {{utilBar $a.Usage.Window5hUtil}}%"></div></div>
+              <span class="quota-pct {{utilColor $a.Usage.Window5hUtil}}-text">{{utilPct $a.Usage.Window5hUtil}}%</span>
+            </div>
+            {{end}}
+            {{if eq $a.Usage.Status "allowed_warning"}}<div class="quota-status">&#9888; warning</div>{{end}}
+            {{if eq $a.Usage.Status "blocked"}}<div class="quota-status">&#9888; blocked</div>{{end}}
+          {{else if $a.Usage.TokensRemaining}}
+            <div class="quota-row">
+              <span class="quota-label">tok</span>
+              <div class="quota-bar"><div class="quota-fill quota-ok" style="width: 100%"></div></div>
+              <span class="quota-pct quota-ok-text">{{$a.Usage.TokensRemaining}}/{{$a.Usage.TokensLimit}}</span>
+            </div>
+          {{else if $a.Usage.RequestsRemaining}}
+            <div class="quota-row">
+              <span class="quota-label">req</span>
+              <div class="quota-bar"><div class="quota-fill quota-ok" style="width: 100%"></div></div>
+              <span class="quota-pct quota-ok-text">{{$a.Usage.RequestsRemaining}}/{{$a.Usage.RequestsLimit}}</span>
+            </div>
           {{end}}
-        {{else}}<span class="bad">&#9679; expired</span>{{end}}
-      </td>
-      <td class="actions">
-        {{if not $a.Active}}<form method="post" action="/account/{{$p.Name}}/{{$a.ID}}/activate"><button class="btn small" type="submit">Switch to</button></form>{{end}}
-        <form method="post" action="/account/{{$p.Name}}/{{$a.ID}}/relogin"><button class="btn small secondary" type="submit">Re-login</button></form>
-        <form method="post" action="/account/{{$p.Name}}/{{$a.ID}}/remove" onsubmit="return confirm('Remove account {{$a.Label}}?')"><button class="btn small danger" type="submit">Remove</button></form>
-      </td>
-    </tr>
+        </div>
+        {{end}}
+      </div>
+      <div class="acct-actions">
+        {{if not $a.Active}}<form method="post" action="/account/{{$p.Name}}/{{$a.ID}}/activate"><button class="btn btn-primary" type="submit">Switch to</button></form>{{end}}
+        <form method="post" action="/account/{{$p.Name}}/{{$a.ID}}/relogin"><button class="btn btn-secondary" type="submit">Re-login</button></form>
+        <form method="post" action="/account/{{$p.Name}}/{{$a.ID}}/remove" onsubmit="return confirm('Remove account {{$a.Label}}?')"><button class="btn btn-danger" type="submit">Remove</button></form>
+      </div>
+    </div>
     {{end}}
-  </table>
   {{else}}
-  <p class="muted">No accounts yet &mdash; add one below.</p>
+    <div style="padding: 12px 4px; font-size: 13px; color: var(--text-faint)">No accounts. Add one below.</div>
   {{end}}
-  <form class="add" method="post" action="/login/{{$p.Name}}">
+  <form class="add-acct" method="post" action="/login/{{$p.Name}}">
     <input type="text" name="label" placeholder="Account label (e.g. alice)" autocomplete="off" spellcheck="false">
-    <button class="btn" type="submit">Add account</button>
+    <button class="btn btn-secondary" type="submit">Add account</button>
   </form>
 </div>
 {{else}}
-<div class="card"><p class="muted">No login-capable providers are enabled.</p></div>
+<div class="msg"><p class="muted">No login-capable providers are enabled.</p></div>
 {{end}}
 {{end}}
 
 {{define "session_device"}}
-<div class="card">
-  <div class="name">{{.Provider}} &mdash; {{.AccountLabel}} <span class="kind">device login</span></div>
+<div class="session-card">
+  <div class="session-head">{{.Provider}} <span class="kind">{{.AccountLabel}} device login</span></div>
   {{if eq (printf "%s" .State) "authorized"}}
-    <p class="ok">&#10004; Logged in. The credential was written to OpenBao and will be kept fresh automatically.</p>
-    <a class="btn" href="/">Back to dashboard</a>
+    <p class="ok" style="color: var(--green)">&#10004; Logged in. Credential written to OpenBao, will be kept fresh automatically.</p>
+    <p style="margin-top: 12px"><a class="btn btn-primary" href="/">Back to dashboard</a></p>
   {{else if eq (printf "%s" .State) "pending"}}
-    <p>1. Open the verification page and confirm the code below:</p>
+    <p style="margin-bottom: 8px">1. Open the verification page and confirm the code:</p>
     <div class="usercode code">{{.UserCode}}</div>
-    <p><a class="btn" href="{{.VerificationURI}}" target="_blank" rel="noreferrer noopener">Open verification page</a></p>
-    <p class="muted">Waiting for approval&hellip; this page refreshes automatically.</p>
+    <p><a class="btn btn-primary" href="{{.VerificationURI}}" target="_blank" rel="noreferrer noopener">Open verification page</a></p>
+    <p class="muted" style="font-size: 12px; margin-top: 12px">Waiting for approval. This page refreshes automatically.</p>
   {{else}}
     <p class="bad">Login {{.State}}: {{.Message}}</p>
-    <a class="btn secondary" href="/">Back to dashboard</a>
+    <p style="margin-top: 12px"><a class="btn btn-secondary" href="/">Back to dashboard</a></p>
   {{end}}
 </div>
 {{end}}
 
 {{define "session_paste"}}
-<div class="card">
-  <div class="name">{{.Provider}} &mdash; {{.AccountLabel}} <span class="kind">browser login</span></div>
+<div class="session-card">
+  <div class="session-head">{{.Provider}} <span class="kind">{{.AccountLabel}} browser login</span></div>
   {{if eq (printf "%s" .State) "authorized"}}
-    <p class="ok">&#10004; Logged in. The credential was written to OpenBao and will be kept fresh automatically.</p>
-    <a class="btn" href="/">Back to dashboard</a>
+    <p style="color: var(--green)">&#10004; Logged in. Credential written to OpenBao, will be kept fresh automatically.</p>
+    <p style="margin-top: 12px"><a class="btn btn-primary" href="/">Back to dashboard</a></p>
   {{else}}
-    {{if eq (printf "%s" .State) "error"}}<p class="bad">Previous attempt failed: {{.Message}}</p>{{end}}
+    {{if eq (printf "%s" .State) "error"}}<p class="bad" style="margin-bottom: 12px">Previous attempt failed: {{.Message}}</p>{{end}}
     <ol>
-      <li><a class="btn" href="{{.AuthURL}}" target="_blank" rel="noreferrer noopener">Open the authorization page</a></li>
+      <li><a class="btn btn-primary" href="{{.AuthURL}}" target="_blank" rel="noreferrer noopener">Open the authorization page</a></li>
       <li>Approve access, then copy the authorization code shown by the provider.</li>
     </ol>
-    <form method="post" action="/session/{{.ID}}/code">
+    <form method="post" action="/session/{{.ID}}/code" style="margin-top: 16px">
       <label for="code">Paste the authorization code (or the full redirect URL / <span class="code">code#state</span>)</label>
       <input id="code" name="code" type="text" autocomplete="off" spellcheck="false" placeholder="paste here" required>
-      <p style="margin-top:12px"><button class="btn" type="submit">Complete login</button>
-      <a class="btn secondary" href="/">Cancel</a></p>
+      <p style="margin-top: 12px"><button class="btn btn-primary" type="submit">Complete login</button>
+      <a class="btn btn-secondary" href="/">Cancel</a></p>
     </form>
   {{end}}
 </div>
 {{end}}
 
 {{define "message"}}
-<div class="card">
+<div class="msg">
   <p class="{{if .Bad}}bad{{else}}muted{{end}}">{{.Text}}</p>
-  <a class="btn secondary" href="/">Back to dashboard</a>
+  <p style="margin-top: 12px"><a class="btn btn-secondary" href="/">Back to dashboard</a></p>
 </div>
 {{end}}
 `
