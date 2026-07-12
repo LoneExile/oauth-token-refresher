@@ -55,12 +55,14 @@ func main() {
 				xc.Scope = pc.Scope
 			}
 			wp.Device, wp.Refresher = xc, xc
+			wp.Prober = oauth.XAIProber{BaseURL: pc.BaseURL}
 		case "anthropic":
 			ac := oauth.NewAnthropic(pc.TokenURL, pc.ClientID)
 			if pc.RedirectURI != "" {
 				ac.Redirect = pc.RedirectURI
 			}
 			wp.Paste, wp.Refresher = ac, ac
+			wp.Prober = oauth.AnthropicProber{BaseURL: pc.BaseURL}
 		default:
 			slog.Error("unknown provider type", "provider", pc.Name, "type", pc.Type)
 			os.Exit(1)

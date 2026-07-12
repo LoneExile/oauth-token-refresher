@@ -32,6 +32,7 @@ type Provider struct {
 	Device    oauth.DeviceLogin
 	Paste     oauth.PasteLogin
 	Refresher oauth.Refresher
+	Prober    oauth.UsageProber
 }
 
 // Kind reports the login flow: "device" (RFC 8628) or "paste" (auth-code+PKCE).
@@ -129,6 +130,7 @@ type AccountView struct {
 	TokenValid bool
 	Expiry     time.Time
 	Err        string
+	Usage      oauth.Usage
 }
 
 // ProviderView is the dashboard section for one provider and its accounts.
@@ -169,6 +171,13 @@ func (m *Manager) Providers() []ProviderView {
 				av.Seeded = true
 				av.Expiry = time.UnixMilli(cred.Expires.Int64())
 				av.TokenValid = cred.Expires.Int64() > 0 && m.clock().Before(av.Expiry)
+				// Probe usage (rate-limit headers) for valid tokens only. The
+				// probe makes a 1-token API call per account per dashboard load.
+				if av.TokenValid && p.Prober != nil {
+					probeCtx, probeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					av.Usage = p.Prober.ProbeUsage(probeCtx, cred.Access)
+					probeCancel()
+				}
 			}
 			pv.Accounts = append(pv.Accounts, av)
 		}

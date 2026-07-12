@@ -78,7 +78,12 @@ form.add input { flex: 1; }
       <td class="status">
         {{if $a.Err}}<span class="bad">{{$a.Err}}</span>
         {{else if not $a.Seeded}}<span class="muted">not logged in</span>
-        {{else if $a.TokenValid}}<span class="ok">&#9679; valid</span> <span class="muted">until {{$a.Expiry.UTC.Format "2006-01-02 15:04 UTC"}}</span>
+        {{else if $a.TokenValid}}
+          <span class="ok">&#9679; valid</span> <span class="muted">until {{$a.Expiry.UTC.Format "2006-01-02 15:04 UTC"}}</span><br>
+          {{if $a.Usage.Err}}<span class="bad">&#9888; {{$a.Usage.Err}}</span>
+          {{else if $a.Usage.TokensRemaining}}<span class="muted">tokens: {{$a.Usage.TokensRemaining}} / {{$a.Usage.TokensLimit}} remaining</span>
+          {{else if $a.Usage.RequestsRemaining}}<span class="muted">requests: {{$a.Usage.RequestsRemaining}} / {{$a.Usage.RequestsLimit}} remaining</span>
+          {{end}}
         {{else}}<span class="bad">&#9679; expired</span>{{end}}
       </td>
       <td class="actions">
