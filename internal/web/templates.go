@@ -258,6 +258,7 @@ ol { padding-left: 20px; } li { margin: 6px 0; }
             {{end}}
             {{if eq $a.Usage.Status "allowed_warning"}}<div class="quota-status">&#9888; warning</div>{{end}}
             {{if eq $a.Usage.Status "blocked"}}<div class="quota-status">&#9888; blocked</div>{{end}}
+            {{if eq $a.Usage.Status "rejected"}}<div class="quota-status">&#9888; limit reached</div>{{end}}
           {{else if $a.Usage.TokensRemaining}}
             {{$u := usedFrac $a.Usage.TokensRemaining $a.Usage.TokensLimit}}
             <div class="quota-row">

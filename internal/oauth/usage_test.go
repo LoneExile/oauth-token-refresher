@@ -60,3 +60,36 @@ func TestProberPathSingleV1(t *testing.T) {
 		})
 	}
 }
+
+// TestParseAnthropicHeaders429KeepsUsage locks in that a 429 rejection still
+// surfaces the unified utilization headers (Anthropic returns them on rejection
+// responses) instead of collapsing to a bare "rate limited" error.
+func TestParseAnthropicHeaders429KeepsUsage(t *testing.T) {
+	h := http.Header{}
+	h.Set("anthropic-ratelimit-unified-status", "rejected")
+	h.Set("anthropic-ratelimit-unified-7d-utilization", "1.0")
+	h.Set("anthropic-ratelimit-unified-5h-utilization", "0.0")
+	u := parseAnthropicHeaders(h, 429)
+	if u.Err != "" {
+		t.Errorf("Err should be empty when usage headers present, got %q", u.Err)
+	}
+	if u.Window7dUtil != "1.0" || u.Window5hUtil != "0.0" {
+		t.Errorf("utilization not parsed: 7d=%q 5h=%q", u.Window7dUtil, u.Window5hUtil)
+	}
+	if u.Status != "rejected" {
+		t.Errorf("status=%q, want rejected", u.Status)
+	}
+}
+
+// TestParseAnthropicHeaders429NoHeaders falls back to the error string only when
+// the response carried no usage signal at all.
+func TestParseAnthropicHeaders429NoHeaders(t *testing.T) {
+	u := parseAnthropicHeaders(http.Header{}, 429)
+	if u.Err != "rate limited (429)" {
+		t.Errorf("Err=%q, want rate limited (429)", u.Err)
+	}
+	u2 := parseAnthropicHeaders(http.Header{}, 500)
+	if u2.Err != "HTTP 500" {
+		t.Errorf("Err=%q, want HTTP 500", u2.Err)
+	}
+}

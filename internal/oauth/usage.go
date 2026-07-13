@@ -124,17 +124,9 @@ func (p XAIProber) ProbeUsage(ctx context.Context, accessToken string) Usage {
 // anthropic-ratelimit-tokens-remaining etc.
 func parseAnthropicHeaders(h http.Header, status int) Usage {
 	u := Usage{}
-	if status == 429 {
-		u.Err = "rate limited (429)"
-		u.RequestsRemaining = "0"
-		u.ResetAt = h.Get("retry-after")
-		return u
-	}
-	if status >= 400 {
-		u.Err = fmt.Sprintf("HTTP %d", status)
-		return u
-	}
-	// OAuth subscription headers (unified-*)
+	// Unified (OAuth subscription) headers are returned on success AND on 429
+	// rejection responses — a rate-limited account still reports its 5h/7d
+	// utilization — so read them regardless of status.
 	u.Status = h.Get("anthropic-ratelimit-unified-status")
 	u.Window5hUtil = h.Get("anthropic-ratelimit-unified-5h-utilization")
 	u.Window7dUtil = h.Get("anthropic-ratelimit-unified-7d-utilization")
@@ -146,6 +138,18 @@ func parseAnthropicHeaders(h http.Header, status int) Usage {
 	u.RequestsLimit = h.Get("anthropic-ratelimit-requests-limit")
 	u.TokensRemaining = h.Get("anthropic-ratelimit-tokens-remaining")
 	u.TokensLimit = h.Get("anthropic-ratelimit-tokens-limit")
+	// Only surface a hard error when the response carried no usage signal to
+	// display. A 429 with unified headers renders the bars + a "limit reached"
+	// status instead, which is more useful than a bare error.
+	if u.Window5hUtil == "" && u.Window7dUtil == "" && u.TokensRemaining == "" && u.RequestsRemaining == "" {
+		switch {
+		case status == 429:
+			u.Err = "rate limited (429)"
+			u.ResetAt = h.Get("retry-after")
+		case status >= 400:
+			u.Err = fmt.Sprintf("HTTP %d", status)
+		}
+	}
 	return u
 }
 
