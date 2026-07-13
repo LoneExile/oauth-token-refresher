@@ -56,10 +56,20 @@ type XAIProber struct {
 	BaseURL string // e.g. "https://api.x.ai"
 }
 
+// apiRoot normalizes a provider base URL to the host root by trimming a trailing
+// slash and a trailing "/v1" segment, so ProbeUsage can safely append the
+// versioned path (e.g. "/v1/chat/completions"). The KV base_url convention
+// differs per provider — xAI stores ".../v1" while Anthropic stores the bare
+// host — and without this the xAI probe hit ".../v1/v1/..." and 404'd.
+func apiRoot(base string) string {
+	base = strings.TrimRight(base, "/")
+	return strings.TrimSuffix(base, "/v1")
+}
+
 // ProbeUsage makes a minimal Anthropic Messages API call and reads the
 // anthropic-ratelimit-unified-* headers from the response.
 func (p AnthropicProber) ProbeUsage(ctx context.Context, accessToken string) Usage {
-	base := p.BaseURL
+	base := apiRoot(p.BaseURL)
 	if base == "" {
 		base = AnthropicBaseURL
 	}
@@ -86,11 +96,11 @@ func (p AnthropicProber) ProbeUsage(ctx context.Context, accessToken string) Usa
 
 // ProbeUsage makes a minimal xAI Grok API call and reads rate-limit headers.
 func (p XAIProber) ProbeUsage(ctx context.Context, accessToken string) Usage {
-	base := p.BaseURL
+	base := apiRoot(p.BaseURL)
 	if base == "" {
 		base = "https://api.x.ai"
 	}
-	body := `{"model":"grok-4.1-fast","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`
+	body := `{"model":"grok-4.20-non-reasoning-latest","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`
 	req, err := http.NewRequestWithContext(ctx, "POST", base+"/v1/chat/completions", strings.NewReader(body))
 	if err != nil {
 		return Usage{Err: err.Error()}
