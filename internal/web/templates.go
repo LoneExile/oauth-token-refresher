@@ -9,6 +9,7 @@ var tmpl = template.Must(template.New("web").Funcs(template.FuncMap{
 	"utilPct":   utilPct,
 	"utilColor": utilColor,
 	"utilBar":   utilBar,
+	"usedFrac":  usedFrac,
 }).Parse(pages))
 
 type layoutData struct {
@@ -63,6 +64,29 @@ func utilBar(s string) string {
 		pct = 100
 	}
 	return fmt.Sprintf("%.0f", pct)
+}
+
+// usedFrac converts a remaining/limit pair into a utilization fraction string
+// ("0.0000".."1.0000") representing how much has been USED, so xAI's bars fill
+// and color with the same semantics as Anthropic's utilization windows (fill as
+// quota is consumed, not as it remains). Returns "0" if either value is
+// unparseable or the limit is non-positive.
+func usedFrac(remaining, limit string) string {
+	var rem, lim float64
+	if _, err := fmt.Sscanf(remaining, "%f", &rem); err != nil {
+		return "0"
+	}
+	if _, err := fmt.Sscanf(limit, "%f", &lim); err != nil || lim <= 0 {
+		return "0"
+	}
+	used := (lim - rem) / lim
+	if used < 0 {
+		used = 0
+	}
+	if used > 1 {
+		used = 1
+	}
+	return fmt.Sprintf("%.4f", used)
 }
 
 const pages = `
@@ -235,16 +259,18 @@ ol { padding-left: 20px; } li { margin: 6px 0; }
             {{if eq $a.Usage.Status "allowed_warning"}}<div class="quota-status">&#9888; warning</div>{{end}}
             {{if eq $a.Usage.Status "blocked"}}<div class="quota-status">&#9888; blocked</div>{{end}}
           {{else if $a.Usage.TokensRemaining}}
+            {{$u := usedFrac $a.Usage.TokensRemaining $a.Usage.TokensLimit}}
             <div class="quota-row">
               <span class="quota-label">tok</span>
-              <div class="quota-bar"><div class="quota-fill quota-ok" style="width: 100%"></div></div>
-              <span class="quota-pct quota-ok-text">{{$a.Usage.TokensRemaining}}/{{$a.Usage.TokensLimit}}</span>
+              <div class="quota-bar"><div class="quota-fill {{utilColor $u}}" style="width: {{utilBar $u}}%"></div></div>
+              <span class="quota-pct {{utilColor $u}}-text">{{utilPct $u}}%</span>
             </div>
           {{else if $a.Usage.RequestsRemaining}}
+            {{$u := usedFrac $a.Usage.RequestsRemaining $a.Usage.RequestsLimit}}
             <div class="quota-row">
               <span class="quota-label">req</span>
-              <div class="quota-bar"><div class="quota-fill quota-ok" style="width: 100%"></div></div>
-              <span class="quota-pct quota-ok-text">{{$a.Usage.RequestsRemaining}}/{{$a.Usage.RequestsLimit}}</span>
+              <div class="quota-bar"><div class="quota-fill {{utilColor $u}}" style="width: {{utilBar $u}}%"></div></div>
+              <span class="quota-pct {{utilColor $u}}-text">{{utilPct $u}}%</span>
             </div>
           {{end}}
         </div>
