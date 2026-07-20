@@ -94,6 +94,20 @@ func FromEnv() (Config, error) {
 		})
 	}
 
+	// Cline (ClinePass) — opt-in. WorkOS device login + refresh; the access
+	// token is stored wire-prefixed (`workos:`) for api.cline.bot. Client ID /
+	// WorkOS base default inside oauth.NewCline when left empty.
+	if boolEnv("CLINE_ENABLED", false) {
+		c.Providers = append(c.Providers, ProviderConfig{
+			Name:     "cline",
+			Type:     "cline",
+			KVPath:   env("CLINE_KV_PATH", "secret/cline/oauth"),
+			BaseURL:  env("CLINE_BASE_URL", "https://api.cline.bot/api/v1"),
+			Issuer:   env("CLINE_WORKOS_BASE", "https://api.workos.com"),
+			ClientID: os.Getenv("CLINE_CLIENT_ID"),
+		})
+	}
+
 	if len(c.Providers) == 0 {
 		return c, fmt.Errorf("no providers enabled (set XAI_ENABLED=true or ANTHROPIC_ENABLED=true)")
 	}

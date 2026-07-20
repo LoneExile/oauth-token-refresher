@@ -63,6 +63,10 @@ func main() {
 			}
 			wp.Paste, wp.Refresher = ac, ac
 			wp.Prober = oauth.AnthropicProber{BaseURL: pc.BaseURL}
+		case "cline":
+			cc := oauth.NewCline(pc.Issuer, pc.ClientID)
+			wp.Device, wp.Refresher = cc, cc
+			wp.Prober = oauth.NoOpProber{}
 		default:
 			slog.Error("unknown provider type", "provider", pc.Name, "type", pc.Type)
 			os.Exit(1)
