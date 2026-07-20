@@ -1,8 +1,8 @@
 # oauth-token-refresher
 
 Keeps **provider OAuth access tokens** fresh in **OpenBao** (or HashiCorp Vault) and can
-run the initial login for you. Supports **xAI SuperGrok** and **Anthropic (Claude Pro/Max)**
-out of the box, and can manage both at once from a single process. Works with any service
+run the initial login for you. Supports **xAI SuperGrok**, **Anthropic (Claude Pro/Max)**,
+and **Cline (ClinePass)** out of the box, and can manage them all at once from a single process. Works with any service
 that consumes OAuth tokens from a secrets manager.
 
 It can also **log you in**: a built-in web UI (LAN-only) runs each provider's OAuth flow
@@ -25,6 +25,7 @@ Mirrors the [OMP OAuth refresh flow](https://omp.sh/docs/memory) for each provid
 2. If access expires within skew (default 10m), exchange the refresh token:
    - **xAI** — OIDC discovery at `XAI_ISSUER`, then an RFC 6749 form-encoded `refresh_token` grant
    - **Anthropic** — a JSON `refresh_token` grant at the fixed `https://api.anthropic.com/v1/oauth/token`, sent with the `anthropic-beta: oauth-2025-04-20` header
+   - **Cline (ClinePass)** — a form-encoded `refresh_token` grant at WorkOS `https://api.workos.com/user_management/authenticate`. The response carries no `expires_in`, so the expiry is read from the JWT `exp` claim (~1h). The access token is stored wire-prefixed (`workos:<jwt>`) for `api.cline.bot`.
 3. Write the new pair (access + optional rotated refresh + `base_url`) back to OpenBao
 4. ESO / your consumer picks up the new value on the next sync interval
 
@@ -42,6 +43,7 @@ refresh loop keeps it alive. No manual seeding required.
 |---|---|---|
 | xAI | Device authorization (RFC 8628) | Click **Log in**, open the shown verification link, confirm the `user_code`, approve. The page polls and completes automatically. |
 | Anthropic | Authorization code + PKCE (out-of-band paste) | Click **Log in**, open the authorize link, approve, then paste the returned code back into the form. |
+| Cline (ClinePass) | Device authorization (RFC 8628, via WorkOS) | Click **Log in**, open the shown verification link, confirm the `user_code`, approve. The page polls and completes automatically. |
 
 Endpoints: `GET /` (dashboard), `POST /login/{provider}`, `GET /session/{id}`, `POST /session/{id}/code`.
 
@@ -58,6 +60,7 @@ Endpoints: `GET /` (dashboard), `POST /login/{provider}`, `GET /session/{id}`, `
 |---|---|---|---|---|
 | xAI SuperGrok | `XAI_ENABLED=true` *(default on)* | `secret/xai/oauth` | `https://api.x.ai/v1` | `b1a00492-…` (SuperGrok) |
 | Anthropic (Claude Pro/Max) | `ANTHROPIC_ENABLED=true` *(opt-in)* | `secret/anthropic/oauth` | `https://api.anthropic.com` | `9d1c250a-…` (Claude Code) |
+| Cline (ClinePass) | `CLINE_ENABLED=true` *(opt-in)* | `secret/cline/oauth` | `https://api.cline.bot/api/v1` | `client_01K3A541…` (WorkOS) |
 
 xAI stays enabled by default so existing deployments are unaffected. Enable Anthropic (or
 both) by setting the flags below.
@@ -66,6 +69,13 @@ both) by setting the flags below.
 > the **native** Anthropic API tied to a Claude Pro/Max subscription — not an API-key. Your
 > consumer must send `Authorization: Bearer <access>` **and** the header
 > `anthropic-beta: oauth-2025-04-20`. It is not an OpenAI-compatible `/v1` endpoint.
+
+> **Cline consumption note:** the Cline OAuth access token is a **WorkOS JWT** stored
+> wire-prefixed as `workos:<jwt>`. The `api.cline.bot` OpenAI-compatible gateway accepts it
+> as `Authorization: Bearer workos:<jwt>` (the prefix distinguishes it from an `sk_` API key).
+> It rotates ~hourly, so consumers should read it per-request (e.g. a mounted-file/callback)
+> rather than pinning it at process start. Subscription-covered `cline-pass/<model>` ids bill
+> at cost 0.
 
 ## Quick start
 
