@@ -39,3 +39,22 @@ func TestUsedFracFeedsUtilHelpers(t *testing.T) {
 		t.Errorf("utilColor = %q, want quota-warn", got)
 	}
 }
+
+func TestCompact(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"15000000", "15M"},
+		{"14300000", "14.3M"},
+		{"53000000", "53M"},
+		{"15000", "15k"},
+		{"8300", "8300"}, // below the 10k threshold: raw digits stay readable
+		{"900", "900"},
+		{"0", "0"},
+		{"", ""},       // unparseable: passed through
+		{"n/a", "n/a"}, // unparseable: passed through
+	}
+	for _, c := range cases {
+		if got := compact(c.in); got != c.want {
+			t.Errorf("compact(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

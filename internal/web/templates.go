@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"html/template"
+	"strings"
 )
 
 var tmpl = template.Must(template.New("web").Funcs(template.FuncMap{
@@ -10,6 +11,7 @@ var tmpl = template.Must(template.New("web").Funcs(template.FuncMap{
 	"utilColor": utilColor,
 	"utilBar":   utilBar,
 	"usedFrac":  usedFrac,
+	"compact":   compact,
 }).Parse(pages))
 
 type layoutData struct {
@@ -89,6 +91,32 @@ func usedFrac(remaining, limit string) string {
 	return fmt.Sprintf("%.4f", used)
 }
 
+// compact renders a counter string in short human form ("15000000" -> "15M",
+// "14300000" -> "14.3M", "900" -> "900") for the rate-limit counter rows, where
+// the raw digits are too wide for the card. Non-numeric input is passed through.
+func compact(s string) string {
+	var f float64
+	if _, err := fmt.Sscanf(s, "%f", &f); err != nil {
+		return s
+	}
+	switch {
+	case f >= 1e6:
+		return trimZero(fmt.Sprintf("%.1f", f/1e6)) + "M"
+	case f >= 1e4:
+		return trimZero(fmt.Sprintf("%.1f", f/1e3)) + "k"
+	default:
+		return fmt.Sprintf("%.0f", f)
+	}
+}
+
+// trimZero drops a trailing ".0" so compact renders "15M", not "15.0M".
+func trimZero(s string) string {
+	if strings.HasSuffix(s, ".0") {
+		return s[:len(s)-2]
+	}
+	return s
+}
+
 const pages = `
 {{define "layout"}}<!doctype html>
 <html lang="en"><head>
@@ -165,12 +193,14 @@ main { flex: 1; max-width: 720px; width: 100%; margin: 0 auto; padding: 28px 24p
 .quota-mid { background: var(--amber); }
 .quota-warn { background: oklch(0.70 0.16 60); }
 .quota-crit { background: var(--red); }
-.quota-pct { font-size: 11px; width: 34px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.quota-pct { font-size: 11px; min-width: 34px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .quota-crit-text { color: var(--red); }
 .quota-warn-text { color: oklch(0.72 0.14 60); }
+.quota-mid-text { color: var(--amber); }
 .quota-ok-text { color: var(--text-faint); }
 .quota-err { font-size: 12px; color: var(--red); margin-top: 2px; }
 .quota-status { font-size: 11px; color: var(--amber); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.03em; }
+.quota-note { font-size: 10px; color: var(--text-faint); margin-top: 2px; opacity: 0.8; }
 
 .acct-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 .btn {
@@ -259,20 +289,24 @@ ol { padding-left: 20px; } li { margin: 6px 0; }
             {{if eq $a.Usage.Status "allowed_warning"}}<div class="quota-status">&#9888; warning</div>{{end}}
             {{if eq $a.Usage.Status "blocked"}}<div class="quota-status">&#9888; blocked</div>{{end}}
             {{if eq $a.Usage.Status "rejected"}}<div class="quota-status">&#9888; limit reached</div>{{end}}
-          {{else if $a.Usage.TokensRemaining}}
+          {{else if or $a.Usage.TokensRemaining $a.Usage.RequestsRemaining}}
+            {{if $a.Usage.TokensRemaining}}
             {{$u := usedFrac $a.Usage.TokensRemaining $a.Usage.TokensLimit}}
             <div class="quota-row">
               <span class="quota-label">tok</span>
               <div class="quota-bar"><div class="quota-fill {{utilColor $u}}" style="width: {{utilBar $u}}%"></div></div>
-              <span class="quota-pct {{utilColor $u}}-text">{{utilPct $u}}%</span>
+              <span class="quota-pct {{utilColor $u}}-text">{{compact $a.Usage.TokensRemaining}}/{{compact $a.Usage.TokensLimit}}</span>
             </div>
-          {{else if $a.Usage.RequestsRemaining}}
+            {{end}}
+            {{if $a.Usage.RequestsRemaining}}
             {{$u := usedFrac $a.Usage.RequestsRemaining $a.Usage.RequestsLimit}}
             <div class="quota-row">
               <span class="quota-label">req</span>
               <div class="quota-bar"><div class="quota-fill {{utilColor $u}}" style="width: {{utilBar $u}}%"></div></div>
-              <span class="quota-pct {{utilColor $u}}-text">{{utilPct $u}}%</span>
+              <span class="quota-pct {{utilColor $u}}-text">{{compact $a.Usage.RequestsRemaining}}/{{compact $a.Usage.RequestsLimit}}</span>
             </div>
+            {{end}}
+            <div class="quota-note">api rate-limit window &middot; not subscription quota</div>
           {{end}}
         </div>
         {{end}}
