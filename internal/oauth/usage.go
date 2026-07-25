@@ -108,13 +108,21 @@ func (p XAIProber) ProbeUsage(ctx context.Context, accessToken string) Usage {
 	// against, and reading it costs no tokens. The rate-limit header probe is
 	// only a fallback, since it burns a (tiny) completion and reports
 	// short-window buckets that sit at 100% remaining.
-	if c, err := probeGrokCredits(ctx, accessToken); err == nil {
+	//
+	// The quota read gets a slice of the caller's budget rather than all of it:
+	// sharing one deadline means a hung grok.com consumes the whole window and
+	// the fallback then dies instantly on an already-expired context — killing
+	// the fallback in exactly the case it exists for.
+	creditsCtx, cancelCredits := context.WithTimeout(ctx, xaiCreditsTimeout)
+	c, cerr := probeGrokCredits(creditsCtx, accessToken)
+	cancelCredits()
+	if cerr == nil {
 		u := Usage{
 			QuotaUtil:  fmt.Sprintf("%.4f", c.Percent/100),
 			QuotaLabel: c.Label(),
 		}
 		if !c.ResetAt.IsZero() {
-			u.QuotaReset = c.ResetAt.Format("Jan 02 15:04 UTC")
+			u.QuotaReset = c.ResetAt.Format("Jan 02 2006 15:04 UTC")
 		}
 		return u
 	}

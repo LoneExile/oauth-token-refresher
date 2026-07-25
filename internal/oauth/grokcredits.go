@@ -29,6 +29,10 @@ const grokCreditsEndpoint = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGr
 // caller honestly rather than impersonating a browser.
 const grokCreditsUA = "oauth-token-refresher"
 
+// xaiCreditsTimeout bounds the quota read so the caller keeps enough of its
+// own deadline to still run the fallback probe if grok.com hangs.
+const xaiCreditsTimeout = 4 * time.Second
+
 // Field numbers from the grok_api_v2 descriptor shipped in the grok.com bundle:
 //
 //	GetGrokCreditsConfigResponse { GrokCreditsConfig config = 1; }
@@ -87,14 +91,17 @@ func probeGrokCredits(ctx context.Context, accessToken string) (grokCredits, err
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("User-Agent", grokCreditsUA)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: xaiCreditsTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return out, err
 	}
 	defer resp.Body.Close()
-	// gRPC-Web reports application errors in a trailer, so a non-2xx status or
-	// a non-zero grpc-status both mean "no usable answer".
+	// A non-2xx status means no usable answer. gRPC-Web also reports application
+	// errors as a grpc-status trailer frame inside the body; grpcWebMessage skips
+	// trailer frames and then errors with "no grpc-web data frame", so an error
+	// reply still degrades to the caller's fallback. The header check below only
+	// catches servers that emit a trailers-only response as real headers.
 	if resp.StatusCode >= 400 {
 		return out, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
@@ -112,9 +119,10 @@ func probeGrokCredits(ctx context.Context, accessToken string) (grokCredits, err
 	return parseGrokCredits(msg)
 }
 
-// grpcWebMessage returns the payload of the first data frame in a gRPC-Web
-// response. Frames are [flags:1][length:4][payload]; frames with the 0x80 bit
-// set carry trailers, not the message.
+// grpcWebMessage returns the payload of the first uncompressed data frame in a
+// gRPC-Web response. Frames are [flags:1][length:4][payload]; flag bit 0x80
+// marks a trailer frame (not the message) and bit 0x01 marks a compressed
+// payload, which this reader does not decode.
 func grpcWebMessage(body []byte) ([]byte, error) {
 	for len(body) >= 5 {
 		flags := body[0]
@@ -124,6 +132,9 @@ func grpcWebMessage(body []byte) ([]byte, error) {
 		}
 		payload := body[5 : 5+n]
 		if flags&0x80 == 0 {
+			if flags&0x01 != 0 {
+				return nil, errors.New("compressed grpc-web frame")
+			}
 			return payload, nil
 		}
 		body = body[5+n:]
@@ -133,8 +144,9 @@ func grpcWebMessage(body []byte) ([]byte, error) {
 
 // parseGrokCredits decodes the fields this dashboard needs out of a
 // GetGrokCreditsConfigResponse. Unknown fields are skipped, so upstream schema
-// additions are harmless; a shape change that drops the percent is reported as
-// an error and leaves the caller on its fallback probe.
+// additions are harmless. Anything else — a dropped percent, a value outside
+// the documented range, a repurposed tag — is an error, so the caller falls
+// back to the rate-limit probe rather than drawing a confident wrong bar.
 func parseGrokCredits(msg []byte) (grokCredits, error) {
 	var out grokCredits
 	cfg, err := protoBytes(msg, fieldConfig)
@@ -149,30 +161,47 @@ func parseGrokCredits(msg []byte) (grokCredits, error) {
 		return out, errors.New("no credit_usage_percent in response")
 	}
 	out.Percent = float64(math.Float32frombits(pct))
+	// Negated comparison so NaN (which fails both) is rejected too: an
+	// unvalidated percent renders as a healthy green "NaN%"/"-12%" bar.
+	if !(out.Percent >= 0 && out.Percent <= 100) {
+		return grokCredits{}, fmt.Errorf("credit_usage_percent %v out of range", out.Percent)
+	}
 
 	if period, err := protoBytes(cfg, fieldCurrentPeriod); err == nil && period != nil {
 		if t, ok, err := protoVarint(period, fieldPeriodType); err == nil && ok {
 			out.PeriodType = int(t)
 		}
 		if end, err := protoBytes(period, fieldPeriodEnd); err == nil && end != nil {
-			if secs, ok, err := protoVarint(end, fieldTimestampSeconds); err == nil && ok {
-				out.ResetAt = time.Unix(int64(secs), 0).UTC()
-			}
+			out.ResetAt = timestampSeconds(end)
 		}
 	}
 	if out.ResetAt.IsZero() {
 		if end, err := protoBytes(cfg, fieldBillingPeriodEnd); err == nil && end != nil {
-			if secs, ok, err := protoVarint(end, fieldTimestampSeconds); err == nil && ok {
-				out.ResetAt = time.Unix(int64(secs), 0).UTC()
-			}
+			out.ResetAt = timestampSeconds(end)
 		}
 	}
-	// A non-unified-billing account reports a meaningless 0% (the web app hides
-	// the panel for those), so treat it as "no quota signal" rather than "0 used".
-	if unified, ok, err := protoVarint(cfg, fieldUnifiedBilling); err == nil && ok && unified == 0 {
-		return out, errors.New("account is not on unified billing")
+	// Only a unified-billing account has a meaningful percent — the web app
+	// hides the panel otherwise. proto3 omits a false scalar entirely, so an
+	// ABSENT field means "not unified", not "unknown": require presence.
+	if unified, ok, err := protoVarint(cfg, fieldUnifiedBilling); err != nil || !ok || unified == 0 {
+		return grokCredits{}, errors.New("account is not on unified billing")
 	}
 	return out, nil
+}
+
+// timestampSeconds reads the seconds field of a google.protobuf.Timestamp,
+// returning the zero time when absent or implausible. The bound keeps a
+// repurposed tag from rendering a confident date in 1901 or the year 292277026596.
+func timestampSeconds(buf []byte) time.Time {
+	secs, ok, err := protoVarint(buf, fieldTimestampSeconds)
+	if err != nil || !ok || secs > math.MaxInt32 {
+		return time.Time{}
+	}
+	t := time.Unix(int64(secs), 0).UTC()
+	if t.Year() < 2020 || t.Year() > 2200 {
+		return time.Time{}
+	}
+	return t
 }
 
 // The three protoX helpers below are a deliberately tiny wire-format reader:
@@ -260,7 +289,10 @@ func protoWalk(buf []byte, fn func(num, wire int, val []byte, v uint64) bool) er
 				return errors.New("bad protobuf length")
 			}
 			i += n
-			if uint64(i)+ln > uint64(len(buf)) {
+			// Compare against the remaining bytes, never i+ln: a valid 10-byte
+			// Uvarint can reach 2^64-1, and uint64(i)+ln would wrap past the
+			// guard and slice with a negative high bound.
+			if ln > uint64(len(buf)-i) {
 				return errors.New("truncated protobuf field")
 			}
 			if !fn(num, wire, buf[i:i+int(ln)], 0) {

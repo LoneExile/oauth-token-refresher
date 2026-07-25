@@ -1,6 +1,13 @@
 package web
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/LoneExile/oauth-token-refresher/internal/oauth"
+)
 
 func TestUsedFrac(t *testing.T) {
 	cases := []struct {
@@ -56,5 +63,76 @@ func TestCompact(t *testing.T) {
 		if got := compact(c.in); got != c.want {
 			t.Errorf("compact(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestDashboardQuotaBranches pins the mutually exclusive quota rows in the
+// dashboard template: which signal wins when several are present, and that the
+// rate-limit counters render as two independent rows rather than one.
+func TestDashboardQuotaBranches(t *testing.T) {
+	cases := []struct {
+		name string
+		u    oauth.Usage
+		want []string
+		deny []string
+	}{
+		{
+			name: "error shadows every bar",
+			u:    oauth.Usage{Err: "HTTP 401", QuotaUtil: "0.6800", Window7dUtil: "0.10"},
+			want: []string{"HTTP 401"},
+			deny: []string{">wk<", ">7d<"},
+		},
+		{
+			name: "subscription quota outranks utilization windows",
+			u:    oauth.Usage{QuotaUtil: "0.6800", QuotaLabel: "wk", QuotaReset: "Jul 27 2026 10:39 UTC", Window7dUtil: "0.10"},
+			want: []string{">wk<", "68%", "resets Jul 27 2026 10:39 UTC"},
+			deny: []string{">7d<", "not subscription quota"},
+		},
+		{
+			name: "quota without a reset time hides the note",
+			u:    oauth.Usage{QuotaUtil: "0.0500", QuotaLabel: "mo"},
+			want: []string{">mo<", "5%"},
+			deny: []string{"resets"},
+		},
+		{
+			name: "anthropic windows still render both bars",
+			u:    oauth.Usage{Window7dUtil: "0.94", Window5hUtil: "0.07", Status: "allowed_warning"},
+			want: []string{">7d<", "94%", ">5h<", "7%", "warning"},
+			deny: []string{">wk<"},
+		},
+		{
+			name: "token and request counters render as separate rows",
+			u:    oauth.Usage{TokensRemaining: "15000000", TokensLimit: "15000000", RequestsRemaining: "450", RequestsLimit: "900"},
+			want: []string{">tok<", "15M/15M", ">req<", "450/900", "50%", "not subscription quota"},
+			deny: []string{">wk<", ">7d<"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			view := []ProviderView{{
+				Name:     "xai",
+				Kind:     "device",
+				ActiveID: "default",
+				Accounts: []AccountView{{
+					ID: "default", Label: "default", Active: true, Seeded: true,
+					TokenValid: true, Expiry: time.Now().Add(time.Hour), Usage: c.u,
+				}},
+			}}
+			if err := tmpl.ExecuteTemplate(&buf, "dashboard", view); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			got := buf.String()
+			for _, w := range c.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("missing %q in:\n%s", w, got)
+				}
+			}
+			for _, d := range c.deny {
+				if strings.Contains(got, d) {
+					t.Errorf("unexpected %q in:\n%s", d, got)
+				}
+			}
+		})
 	}
 }

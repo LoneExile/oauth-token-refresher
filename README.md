@@ -77,6 +77,16 @@ both) by setting the flags below.
 > rather than pinning it at process start. Subscription-covered `cline-pass/<model>` ids bill
 > at cost 0.
 
+> **Dashboard usage bars — where the numbers come from.** For Anthropic they are the
+> `anthropic-ratelimit-unified-*` utilization headers. For xAI the dashboard reads the
+> **subscription quota** ("Weekly SuperGrok Heavy Limit") from the same gRPC-Web call the
+> grok.com Usage panel uses, `grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig`, which
+> accepts the OAuth access token this service already holds and costs no tokens. That call
+> is an internal endpoint of the grok.com web app, **not a documented API** — if it changes,
+> the probe falls back to a 1-token completion against `/v1/chat/completions` and shows the
+> `x-ratelimit-*` window counters instead. Both probes run per dashboard load, per account;
+> they are skipped entirely for expired tokens.
+
 ## Quick start
 
 ### Docker
