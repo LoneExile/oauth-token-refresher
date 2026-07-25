@@ -273,6 +273,13 @@ ol { padding-left: 20px; } li { margin: 6px 0; }
         <div class="quota">
           {{if $a.Usage.Err}}
             <div class="quota-err">&#9888; {{$a.Usage.Err}}</div>
+          {{else if $a.Usage.QuotaUtil}}
+            <div class="quota-row">
+              <span class="quota-label">{{$a.Usage.QuotaLabel}}</span>
+              <div class="quota-bar"><div class="quota-fill {{utilColor $a.Usage.QuotaUtil}}" style="width: {{utilBar $a.Usage.QuotaUtil}}%"></div></div>
+              <span class="quota-pct {{utilColor $a.Usage.QuotaUtil}}-text">{{utilPct $a.Usage.QuotaUtil}}%</span>
+            </div>
+            {{if $a.Usage.QuotaReset}}<div class="quota-note">subscription quota &middot; resets {{$a.Usage.QuotaReset}}</div>{{end}}
           {{else if $a.Usage.Window7dUtil}}
             <div class="quota-row">
               <span class="quota-label">7d</span>

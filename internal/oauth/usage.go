@@ -24,6 +24,13 @@ type Usage struct {
 	Window7dUtil  string // anthropic-ratelimit-unified-7d-utilization
 	Window5hReset string // unix timestamp
 	Window7dReset string // unix timestamp
+	// Subscription quota (xAI SuperGrok, from grok.com): the allowance the
+	// account's plan is actually billed against, which no rate-limit header
+	// reports. QuotaUtil is a 0.0-1.0 fraction so it renders with the same
+	// helpers as the Anthropic utilization windows.
+	QuotaUtil  string
+	QuotaLabel string // bar label for the quota window: "wk", "mo", "sub"
+	QuotaReset string // pre-formatted reset time, empty when unknown
 	// Status: "allowed", "allowed_warning", "blocked"
 	Status string
 	// ResetAt is when the current rate-limit window resets.
@@ -94,8 +101,24 @@ func (p AnthropicProber) ProbeUsage(ctx context.Context, accessToken string) Usa
 	return parseAnthropicHeaders(resp.Header, resp.StatusCode)
 }
 
-// ProbeUsage makes a minimal xAI Grok API call and reads rate-limit headers.
+// ProbeUsage reports the xAI subscription quota, falling back to a minimal
+// Grok API call for rate-limit headers when the quota read fails.
 func (p XAIProber) ProbeUsage(ctx context.Context, accessToken string) Usage {
+	// Prefer the subscription quota: it is the number the account is billed
+	// against, and reading it costs no tokens. The rate-limit header probe is
+	// only a fallback, since it burns a (tiny) completion and reports
+	// short-window buckets that sit at 100% remaining.
+	if c, err := probeGrokCredits(ctx, accessToken); err == nil {
+		u := Usage{
+			QuotaUtil:  fmt.Sprintf("%.4f", c.Percent/100),
+			QuotaLabel: c.Label(),
+		}
+		if !c.ResetAt.IsZero() {
+			u.QuotaReset = c.ResetAt.Format("Jan 02 15:04 UTC")
+		}
+		return u
+	}
+
 	base := apiRoot(p.BaseURL)
 	if base == "" {
 		base = "https://api.x.ai"
