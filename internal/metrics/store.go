@@ -18,6 +18,11 @@ type providerState struct {
 	cycles       int64
 	errors       int64
 	lastSuccess  bool
+
+	// auto-switch observability
+	switches   int64 // total active-account switches made by the policy
+	exhausted  bool  // active spent AND no account had enough headroom
+	activeUtil int   // worst-window utilization of the active account (-1 unknown)
 }
 
 // Store tracks refresh state for every managed provider. Safe for concurrent use.
@@ -36,7 +41,9 @@ func NewStore(providers []string) *Store {
 		if _, ok := s.state[p]; ok {
 			continue
 		}
-		s.state[p] = &providerState{}
+		// activeUtil starts at -1 ("not evaluated"): the zero value would
+		// publish 0, i.e. a confident claim of a completely unused account.
+		s.state[p] = &providerState{activeUtil: -1}
 		s.order = append(s.order, p)
 	}
 	return s
@@ -45,7 +52,7 @@ func NewStore(providers []string) *Store {
 func (s *Store) get(provider string) *providerState {
 	ps := s.state[provider]
 	if ps == nil {
-		ps = &providerState{}
+		ps = &providerState{activeUtil: -1}
 		s.state[provider] = ps
 		s.order = append(s.order, provider)
 	}
@@ -78,6 +85,29 @@ func (s *Store) Err(provider string, err error) {
 	ps.lastSuccess = false
 	ps.cycles++
 	ps.errors++
+}
+
+// AutoSwitch records one auto-switch evaluation. action mirrors
+// web.SwitchAction; activePct is the active account's worst-window
+// utilization, or a negative number when it could not be read.
+//
+// exhausted is a LEVEL, not an event: it stays set until a later pass finds
+// headroom again, because "every account is spent" is a condition an operator
+// has to clear, and an alert needs something that stays true while it lasts.
+func (s *Store) AutoSwitch(provider, action string, activePct int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ps := s.get(provider)
+	ps.activeUtil = activePct
+	switch action {
+	case "switched":
+		ps.switches++
+		ps.exhausted = false
+	case "exhausted":
+		ps.exhausted = true
+	case "none", "cooldown":
+		ps.exhausted = false
+	}
 }
 
 // ProviderSnapshot is the JSON /status shape for one provider.
@@ -153,6 +183,12 @@ func (s *Store) WritePrometheus(w io.Writer) {
 			func(p *providerState) float64 { return b2f(p.lastSuccess) }},
 		{"oauth_refresh_token_valid", "Whether the current access token is unexpired (1) or not (0).", "gauge",
 			func(p *providerState) float64 { return b2f(!p.accessExpiry.IsZero() && p.accessExpiry.After(now)) }},
+		{"oauth_refresh_autoswitch_total", "Total active-account switches made by the auto-switch policy.", "counter",
+			func(p *providerState) float64 { return float64(p.switches) }},
+		{"oauth_refresh_accounts_exhausted", "1 when the active account is spent AND no other account has enough headroom.", "gauge",
+			func(p *providerState) float64 { return b2f(p.exhausted) }},
+		{"oauth_refresh_active_account_util_percent", "Worst-window utilization of the active account, 0-100 (-1 unknown).", "gauge",
+			func(p *providerState) float64 { return float64(p.activeUtil) }},
 	}
 
 	for _, f := range families {

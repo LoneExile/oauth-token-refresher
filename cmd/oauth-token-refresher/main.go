@@ -110,6 +110,35 @@ func main() {
 		return failed
 	}
 
+	// autoSwitch runs on its OWN, slower ticker: each pass costs a real API
+	// probe per managed provider, so it must not ride the 60s refresh loop.
+	pol := web.AutoSwitchPolicy{
+		Providers:  cfg.AutoSwitchProviders,
+		TriggerPct: cfg.AutoSwitchTriggerP,
+		MarginPct:  cfg.AutoSwitchMarginP,
+		Cooldown:   cfg.AutoSwitchCooldown,
+	}
+	autoSwitch := func() {
+		for _, d := range mgr.AutoSwitch(ctx, pol, time.Now()) {
+			store.AutoSwitch(d.Provider, string(d.Action), d.FromPct)
+			switch d.Action {
+			case web.ActionSwitched:
+				slog.Info("autoswitch", "provider", d.Provider, "from", d.From,
+					"from_pct", d.FromPct, "to", d.To, "to_pct", d.ToPct)
+			case web.ActionExhausted:
+				// Every account is spent: no amount of switching fixes this,
+				// so say it loudly enough for the alert to have something to
+				// fire on beyond the metric.
+				slog.Warn("autoswitch: all accounts exhausted", "provider", d.Provider,
+					"active", d.From, "active_pct", d.FromPct, "candidates", d.Candidate)
+			case web.ActionUnknown:
+				if d.Err != nil {
+					slog.Warn("autoswitch: undecidable", "provider", d.Provider, "err", d.Err)
+				}
+			}
+		}
+	}
+
 	failed := run()
 	if cfg.Once {
 		if failed > 0 {
@@ -117,9 +146,12 @@ func main() {
 		}
 		return
 	}
+	autoSwitch()
 
 	t := time.NewTicker(cfg.LoopInterval)
 	defer t.Stop()
+	as := time.NewTicker(cfg.AutoSwitchInterval)
+	defer as.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -127,6 +159,8 @@ func main() {
 			return
 		case <-t.C:
 			run()
+		case <-as.C:
+			autoSwitch()
 		}
 	}
 }

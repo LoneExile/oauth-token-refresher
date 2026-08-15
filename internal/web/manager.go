@@ -97,6 +97,12 @@ type Manager struct {
 	order     []string
 	ttl       time.Duration
 
+	// lastSwitch is the last auto-switch time per provider, guarded by accMu.
+	// It is the cooldown's only state and is deliberately in-memory: a restart
+	// re-arms switching immediately, which is the safe direction (a spent
+	// account still reads spent on the next probe).
+	lastSwitch map[string]time.Time
+
 	// injectable for tests
 	clock func() time.Time
 	sleep func(time.Duration)
@@ -105,11 +111,12 @@ type Manager struct {
 // NewManager builds a Manager for the given providers (dashboard order preserved).
 func NewManager(providers []Provider) *Manager {
 	m := &Manager{
-		sessions:  make(map[string]*Session),
-		providers: make(map[string]Provider, len(providers)),
-		ttl:       15 * time.Minute,
-		clock:     time.Now,
-		sleep:     time.Sleep,
+		sessions:   make(map[string]*Session),
+		providers:  make(map[string]Provider, len(providers)),
+		ttl:        15 * time.Minute,
+		lastSwitch: make(map[string]time.Time),
+		clock:      time.Now,
+		sleep:      time.Sleep,
 	}
 	for _, p := range providers {
 		if _, ok := m.providers[p.Name]; ok {
@@ -311,6 +318,13 @@ func (m *Manager) Activate(provider, id string) error {
 	defer m.accMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	return m.activateLocked(ctx, p, id)
+}
+
+// activateLocked is Activate's body, callable by anything already holding
+// accMu (the auto-switch evaluator probes and switches under one lock so a
+// concurrent UI switch cannot land between its decision and its write).
+func (m *Manager) activateLocked(ctx context.Context, p Provider, id string) error {
 	reg, err := m.ensureRegistryLocked(ctx, p)
 	if err != nil {
 		return err
@@ -329,7 +343,7 @@ func (m *Manager) Activate(provider, id string) error {
 	if err := p.Bao.WriteRegistry(ctx, reg); err != nil {
 		return err
 	}
-	slog.Info("active account switched", "provider", provider, "account", id)
+	slog.Info("active account switched", "provider", p.Name, "account", id)
 	return nil
 }
 

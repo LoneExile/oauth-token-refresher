@@ -220,3 +220,29 @@ func UtilPercent(util string) int {
 	}
 	return pct
 }
+
+// WorstUtilPercent reports how used the account is, as the HIGHEST utilization
+// across every window the probe reported: Anthropic's 5h and 7d subscription
+// windows and the xAI subscription quota. ok is false when the probe failed or
+// reported no window at all.
+//
+// The maximum is the right reduction for switching decisions: an account whose
+// 7d budget is nearly spent has no headroom even while its 5h window looks
+// empty, and vice versa. Never infer headroom from a failed probe — an unknown
+// account is not a free one, which is why ok is returned separately rather
+// than folding "unknown" into 0.
+func WorstUtilPercent(u Usage) (pct int, ok bool) {
+	if u.Err != "" {
+		return 0, false
+	}
+	worst := -1
+	for _, w := range []string{u.Window5hUtil, u.Window7dUtil, u.QuotaUtil} {
+		if p := UtilPercent(w); p > worst {
+			worst = p
+		}
+	}
+	if worst < 0 {
+		return 0, false
+	}
+	return worst, true
+}

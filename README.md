@@ -157,6 +157,45 @@ All config is env-based — no config files.
 | `LISTEN_ADDR` | `:8080` | Health / metrics HTTP listener |
 | `LOGIN_UI_ENABLED` | `true` | Serve the self-service login web UI (gate it — see above) |
 
+### Automatic account switching (opt-in)
+
+A provider can hold several accounts, and normally you pick the active one by
+hand ("Switch to" in the UI). With `AUTOSWITCH_PROVIDERS` set, the refresher
+watches the active account's remaining quota and hands the active role to the
+account with the most headroom before the active one runs out.
+
+It reads the same rate-limit signal the dashboard shows — Anthropic's 5h and 7d
+subscription windows, and the xAI subscription quota — and takes the **highest**
+of them as "how used" an account is, so an account with a nearly spent 7d budget
+is not mistaken for a fresh one because its 5h window happens to be empty.
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTOSWITCH_PROVIDERS` | *(empty = off)* | Comma-separated providers to manage, e.g. `anthropic` |
+| `AUTOSWITCH_INTERVAL` | `5m` | How often to evaluate. Each pass costs one API probe per managed provider |
+| `AUTOSWITCH_TRIGGER_PCT` | `80` | Consider switching once the active account is this used |
+| `AUTOSWITCH_MARGIN_PCT` | `15` | A candidate must be at least this much less used to be worth taking |
+| `AUTOSWITCH_COOLDOWN` | `15m` | Minimum time between switches for one provider |
+
+Design notes worth knowing before tuning it:
+
+- **Probing is lazy.** Only the active account is probed each pass; the others
+  are probed only once the active one crosses the trigger. Every probe is a real
+  (1-token) API call, so a "nothing to do" pass costs exactly one call.
+- **Trigger well below the ceiling.** A switch is a write to OpenBao; consumers
+  only see it once their secret sync picks it up. Switching at 99% hands over an
+  account that is already failing requests.
+- **An unreadable account is never treated as a free one.** A failed probe
+  excludes that account from candidacy, and a failed probe on the *active*
+  account is not read as "spent" — neither direction may be inferred from a
+  missing measurement.
+- **When nothing has headroom** the active account is left alone and
+  `oauth_refresh_accounts_exhausted` goes to 1 (with a warning log). No amount of
+  switching fixes an exhausted set; that state is for a human.
+
+Metrics: `oauth_refresh_autoswitch_total`, `oauth_refresh_accounts_exhausted`,
+`oauth_refresh_active_account_util_percent` (all labelled by `provider`).
+
 ### xAI provider
 
 | Variable | Default | Description |

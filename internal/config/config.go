@@ -46,6 +46,16 @@ type Config struct {
 
 	// LoginUI serves the self-service OAuth login frontend.
 	LoginUI bool
+
+	// AutoSwitch moves the active account to one with more headroom when the
+	// active account's quota is nearly spent. Opt-in: empty AUTOSWITCH_PROVIDERS
+	// disables it entirely, so an unconfigured deployment behaves exactly as
+	// before.
+	AutoSwitchProviders []string
+	AutoSwitchInterval  time.Duration
+	AutoSwitchTriggerP  int
+	AutoSwitchMarginP   int
+	AutoSwitchCooldown  time.Duration
 }
 
 func FromEnv() (Config, error) {
@@ -57,6 +67,16 @@ func FromEnv() (Config, error) {
 		Once:         boolEnv("ONCE", false),
 		ListenAddr:   env("LISTEN_ADDR", ":8080"),
 		LoginUI:      boolEnv("LOGIN_UI_ENABLED", true),
+		// Trigger at 80 rather than nearer the ceiling: a switch only reaches
+		// consumers after OpenBao -> ESO -> kubelet republishes the mounted
+		// secret, so handing over at 99% would hand over an account that is
+		// already failing. Margin 15 keeps three near-equal accounts from
+		// passing the active role in circles.
+		AutoSwitchProviders: listEnv("AUTOSWITCH_PROVIDERS"),
+		AutoSwitchInterval:  durationEnv("AUTOSWITCH_INTERVAL", 5*time.Minute),
+		AutoSwitchTriggerP:  intEnv("AUTOSWITCH_TRIGGER_PCT", 80),
+		AutoSwitchMarginP:   intEnv("AUTOSWITCH_MARGIN_PCT", 15),
+		AutoSwitchCooldown:  durationEnv("AUTOSWITCH_COOLDOWN", 15*time.Minute),
 	}
 	if c.OpenBaoToken == "" {
 		return c, fmt.Errorf("OPENBAO_TOKEN is required")
@@ -153,4 +173,31 @@ func boolEnv(k string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+// intEnv reads a plain integer, falling back to def on anything unparseable so
+// a typo cannot silently disable a threshold by turning it into 0 (a 0 trigger
+// would switch accounts constantly).
+func intEnv(k string, def int) int {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+// listEnv reads a comma-separated list, dropping blanks. An unset or empty
+// value yields nil, which is what keeps the feature opt-in.
+func listEnv(k string) []string {
+	var out []string
+	for _, part := range strings.Split(os.Getenv(k), ",") {
+		if s := strings.TrimSpace(part); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
