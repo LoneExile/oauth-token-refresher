@@ -194,6 +194,66 @@ bao kv put secret/anthropic/oauth \
 `expires` is unix **milliseconds**. If a refresh token is revoked, re-login and
 re-seed — no config changes needed.
 
+### OpenBao permissions
+
+The token needs R/W on the data paths plus read/list/delete on metadata
+(account removal deletes KV metadata):
+
+```hcl
+path "secret/data/xai/*"          { capabilities = ["create", "read", "update"] }
+path "secret/metadata/xai/*"      { capabilities = ["read", "list", "delete"] }
+path "secret/data/anthropic/*"    { capabilities = ["create", "read", "update"] }
+path "secret/metadata/anthropic/*"{ capabilities = ["read", "list", "delete"] }
+```
+
+Create a periodic service token so it never expires (renew separately):
+
+```bash
+bao token create -policy=oauth-refresh -period=768h -orphan
+```
+
+## Metrics
+
+All families are prefixed `oauth_refresh_` and labeled `{provider="…"}`:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `oauth_refresh_cycles_total` | counter | Refresh cycles run |
+| `oauth_refresh_errors_total` | counter | Cycles that errored |
+| `oauth_refresh_success` | gauge | Last cycle succeeded (1) / failed (0) |
+| `oauth_refresh_token_valid` | gauge | Current access token unexpired (1) / not (0) |
+| `oauth_refresh_last_success_timestamp_seconds` | gauge | Unix time of last successful cycle |
+| `oauth_refresh_last_refresh_timestamp_seconds` | gauge | Unix time the token was last re-minted |
+| `oauth_refresh_access_expiry_timestamp_seconds` | gauge | Unix time the access token expires |
+| `oauth_refresh_start_timestamp_seconds` | gauge | Process start time (unlabeled) |
+
+Plus auto-switch: `oauth_refresh_autoswitch_total` (counter),
+`oauth_refresh_accounts_exhausted` (gauge), `oauth_refresh_active_account_util_percent`
+(gauge).
+
+Handy Grafana/PromQL:
+
+```promql
+# Seconds until a provider's access token expires
+oauth_refresh_access_expiry_timestamp_seconds - time()
+
+# Alert: token expired or refresher failing for >10m
+oauth_refresh_token_valid == 0
+increase(oauth_refresh_errors_total[10m]) > 0
+```
+
+Scrape with a Prometheus pod annotation (metrics share the health port):
+
+```yaml
+metadata:
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+```
+
+…or a `ServiceMonitor` / `PodMonitor` targeting port `8080` path `/metrics`.
+
 ## For developers
 
 Building, testing, architecture, and how to add a provider: see
