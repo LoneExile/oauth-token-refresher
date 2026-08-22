@@ -365,6 +365,27 @@ func (m *Manager) SetAutoSwitch(provider string, on bool) error {
 	return m.setAutoSwitchLocked(ctx, p, on)
 }
 
+// LiveToken returns the live access token for the provider's active account —
+// the same credential mirrored to the provider's live KV path. It is a
+// read-only escape hatch for consumers that want the current token without a
+// secrets-manager client (e.g. the OMP extension). Empty when no account is
+// active.
+func (m *Manager) LiveToken(provider string) (string, error) {
+	p, ok := m.providers[provider]
+	if !ok {
+		return "", fmt.Errorf("unknown provider %q", provider)
+	}
+	m.accMu.Lock()
+	defer m.accMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cred, err := p.Bao.ReadCredential(ctx)
+	if err != nil {
+		return "", err
+	}
+	return cred.Access, nil
+}
+
 // Activate makes account id the provider's active account: its credential is
 // copied to the live path and the registry pointer is flipped. No re-login.
 func (m *Manager) Activate(provider, id string) error {

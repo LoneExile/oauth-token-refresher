@@ -106,6 +106,38 @@ func TestActivateAndRemoveRoutes(t *testing.T) {
 	}
 }
 
+func TestTokenRouteReturnsLiveAccess(t *testing.T) {
+	v := newFakeVault(t)
+	bao := v.client("secret/anthropic/oauth", "https://base")
+	m := NewManager([]Provider{{Name: "anthropic", Bao: bao, Paste: &fakePaste{cred: validCred("AT")}}})
+	addAccount(t, m, &fakePaste{cred: validCred("AT")}, "anthropic", "alice", "ALICE")
+	srv := serve(t, m)
+
+	resp, err := http.Get(srv.URL + "/token/anthropic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("token status=%d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), `"access":"AT"`) {
+		t.Fatalf("token body = %s", body)
+	}
+
+	// Unknown provider must 200 with an error object (or 404), never leak.
+	resp, err = http.Get(srv.URL + "/token/nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ = io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"error"`) {
+		t.Fatalf("unknown provider token body = %s", body)
+	}
+}
+
 func TestAutoSwitchRoutesToggleAndStatus(t *testing.T) {
 	v := newFakeVault(t)
 	bao := v.client("secret/anthropic/oauth", "https://base")

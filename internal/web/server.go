@@ -16,6 +16,7 @@ import (
 //	POST /account/{provider}/{id}/remove      delete an account
 //	POST /autoswitch/{provider}/on|off        set the provider's auto-switch preference
 //	GET  /autoswitch/{provider}               current auto-switch state (JSON)
+//	GET  /token/{provider}                    live access token for the active account (JSON, LAN-only)
 //	GET  /session/{id}                         login progress / paste form
 //	POST /session/{id}/code                    submit a pasted authorization code
 func Register(mux *http.ServeMux, m *Manager) {
@@ -27,6 +28,7 @@ func Register(mux *http.ServeMux, m *Manager) {
 	mux.HandleFunc("GET /autoswitch/{provider}", m.handleAutoSwitchStatus)
 	mux.HandleFunc("POST /autoswitch/{provider}/on", m.handleAutoSwitchOn)
 	mux.HandleFunc("POST /autoswitch/{provider}/off", m.handleAutoSwitchOff)
+	mux.HandleFunc("GET /token/{provider}", m.handleToken)
 	mux.HandleFunc("GET /session/{id}", m.handleSession)
 	mux.HandleFunc("POST /session/{id}/code", m.handleCode)
 }
@@ -83,6 +85,16 @@ func (m *Manager) handleAutoSwitchOff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (m *Manager) handleToken(w http.ResponseWriter, r *http.Request) {
+	access, err := m.LiveToken(r.PathValue("provider"))
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		_, _ = fmt.Fprintf(w, `{"error":%q}`, err.Error())
+		return
+	}
+	_, _ = fmt.Fprintf(w, `{"access":%q}`, access)
 }
 
 func (m *Manager) handleAutoSwitchStatus(w http.ResponseWriter, r *http.Request) {
