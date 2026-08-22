@@ -1,95 +1,60 @@
 # oauth-token-refresher
 
-Keeps **provider OAuth access tokens** fresh in **OpenBao** (or HashiCorp Vault) and can
-run the initial login for you. Supports **xAI SuperGrok**, **Anthropic (Claude Pro/Max)**,
-and **Cline (ClinePass)** out of the box, and can manage them all at once from a single process. Works with any service
-that consumes OAuth tokens from a secrets manager.
+Keep your **LLM subscription OAuth tokens** (xAI SuperGrok, Anthropic Claude
+Pro/Max, Cline ClinePass) **fresh and always valid** — without ever touching
+the provider's web page again.
 
-It can also **log you in**: a built-in web UI (LAN-only) runs each provider's OAuth flow
-end-to-end and seeds OpenBao for you — no manual `bao kv put` required.
+It does two things:
 
-```text
-oauth-token-refresher  →  OpenBao / Vault KV  →  ESO / External Secrets  →  K8s Secret
+1. **Logs you in** — a small web UI runs each provider's OAuth flow end-to-end
+   and stores the credential for you (no manual token copying).
+2. **Keeps you logged in** — a background loop re-mints the access token
+   before it expires, forever, and hands it to whatever apps consume it via a
+   secrets manager (OpenBao or HashiCorp Vault).
+
+If your apps use [External Secrets Operator](https://external-secrets.io/)
+(or any Vault KV consumer), the refreshed token flows to them automatically.
+
+```mermaid
+flowchart LR
+    subgraph Ref["oauth-token-refresher"]
+        UI["Web UI · login + dashboard"]
+        LOOP["Refresh loop · every 60s"]
+    end
+    UI -->|"OAuth login (device / paste)"| OAuth["Provider OAuth<br/>xAI · Anthropic · Cline"]
+    LOOP -->|"refresh_token grant"| OAuth
+    OAuth -->|"new access + refresh token"| Bao[("OpenBao / Vault KV")]
+    UI -->|"writes your credential"| Bao
+    Bao -->|"External Secrets Operator"| ESO["ESO"]
+    ESO -->|"Kubernetes Secret"| App["Your app"]
+    App -.->|"calls API with Bearer token"| API["Provider API"]
 ```
 
-The refresher writes **only** to OpenBao — it does not patch Kubernetes Secrets directly.
-Use [External Secrets Operator](https://external-secrets.io/) or any Vault KV consumer to
-sync the token into your application Secrets.
+The refresher writes **only** to OpenBao — it never patches Kubernetes Secrets
+directly. Anything that can read a KV path can consume the token.
 
 ## How it works
 
-Mirrors the [OMP OAuth refresh flow](https://omp.sh/docs/memory) for each provider. Every
-`LOOP_INTERVAL` (default 60s), for each enabled provider:
+Every `LOOP_INTERVAL` (default 60s), for each provider:
 
-1. Read `{access, refresh, expires}` from its OpenBao KV v2 path
-2. If access expires within skew (default 10m), exchange the refresh token:
-   - **xAI** — OIDC discovery at `XAI_ISSUER`, then an RFC 6749 form-encoded `refresh_token` grant
-   - **Anthropic** — a JSON `refresh_token` grant at the fixed `https://api.anthropic.com/v1/oauth/token`, sent with the `anthropic-beta: oauth-2025-04-20` header
-   - **Cline (ClinePass)** — a form-encoded `refresh_token` grant at WorkOS `https://api.workos.com/user_management/authenticate`. The response carries no `expires_in`, so the expiry is read from the JWT `exp` claim (~1h). The access token is stored wire-prefixed (`workos:<jwt>`) for `api.cline.bot`.
-3. Write the new pair (access + optional rotated refresh + `base_url`) back to OpenBao
-4. ESO / your consumer picks up the new value on the next sync interval
+1. Read `{access, refresh, expires}` from its KV path.
+2. If the access token expires within `REFRESH_SKEW` (default 10m), exchange
+   the refresh token for a new pair:
+   - **xAI** — OIDC discovery + form-encoded `refresh_token` grant.
+   - **Anthropic** — JSON `refresh_token` grant at
+     `https://api.anthropic.com/v1/oauth/token` with the
+     `anthropic-beta: oauth-2025-04-20` header.
+   - **Cline (ClinePass)** — form-encoded grant via WorkOS. The response has
+     no `expires_in`, so expiry is read from the JWT `exp` claim (~1h). The
+     access token is stored wire-prefixed (`workos:<jwt>`) for `api.cline.bot`.
+3. Write the new pair back to OpenBao.
+4. Your consumer (ESO etc.) picks it up on its next sync.
 
-Tokens are written with a 5-minute client skew (matching OMP's `ACCESS_TOKEN_CLIENT_SKEW`)
-so consumers almost never see a near-dead token. Each successful/failed cycle is recorded
-per provider and exposed at `/metrics` and `/status`.
-
-## Self-service login (web UI)
-
-Set `LOGIN_UI_ENABLED=true` (default on) and open the service in a browser to log in to each
-provider — the UI runs the full OAuth flow and writes the credential to OpenBao, then the
-refresh loop keeps it alive. No manual seeding required.
-
-| Provider | Login flow | What you do |
-|---|---|---|
-| xAI | Device authorization (RFC 8628) | Click **Log in**, open the shown verification link, confirm the `user_code`, approve. The page polls and completes automatically. |
-| Anthropic | Authorization code + PKCE (out-of-band paste) | Click **Log in**, open the authorize link, approve, then paste the returned code back into the form. |
-| Cline (ClinePass) | Device authorization (RFC 8628, via WorkOS) | Click **Log in**, open the shown verification link, confirm the `user_code`, approve. The page polls and completes automatically. |
-
-Endpoints: `GET /` (dashboard), `POST /login/{provider}`, `GET /session/{id}`, `POST /session/{id}/code`.
-
-> **Security — gate this.** The login UI mints provider tokens and writes them to OpenBao.
-> Expose `/`, `/login/*`, and `/session/*` **LAN-only and behind SSO** (e.g. an auth proxy such as oauth2-proxy). Leave
-> `/healthz`, `/readyz`, `/status`, and `/metrics` reachable in-cluster — Kubernetes probes and
-> Prometheus scrape the pod directly, bypassing the gateway, so gating the UI does not break
-> monitoring. Disable the UI entirely with `LOGIN_UI_ENABLED=false`. Runs single-replica
-> (login sessions are in memory).
-
-## Providers
-
-| Provider | Enable | KV path (default) | base_url (default) | Client ID |
-|---|---|---|---|---|
-| xAI SuperGrok | `XAI_ENABLED=true` *(default on)* | `secret/xai/oauth` | `https://api.x.ai/v1` | `b1a00492-…` (SuperGrok) |
-| Anthropic (Claude Pro/Max) | `ANTHROPIC_ENABLED=true` *(opt-in)* | `secret/anthropic/oauth` | `https://api.anthropic.com` | `9d1c250a-…` (Claude Code) |
-| Cline (ClinePass) | `CLINE_ENABLED=true` *(opt-in)* | `secret/cline/oauth` | `https://api.cline.bot/api/v1` | `client_01K3A541…` (WorkOS) |
-
-xAI stays enabled by default so existing deployments are unaffected. Enable Anthropic (or
-both) by setting the flags below.
-
-> **Anthropic consumption note:** the Anthropic OAuth access token is a **Bearer** token for
-> the **native** Anthropic API tied to a Claude Pro/Max subscription — not an API-key. Your
-> consumer must send `Authorization: Bearer <access>` **and** the header
-> `anthropic-beta: oauth-2025-04-20`. It is not an OpenAI-compatible `/v1` endpoint.
-
-> **Cline consumption note:** the Cline OAuth access token is a **WorkOS JWT** stored
-> wire-prefixed as `workos:<jwt>`. The `api.cline.bot` OpenAI-compatible gateway accepts it
-> as `Authorization: Bearer workos:<jwt>` (the prefix distinguishes it from an `sk_` API key).
-> It rotates ~hourly, so consumers should read it per-request (e.g. a mounted-file/callback)
-> rather than pinning it at process start. Subscription-covered `cline-pass/<model>` ids bill
-> at cost 0.
-
-> **Dashboard usage bars — where the numbers come from.** For Anthropic they are the
-> `anthropic-ratelimit-unified-*` utilization headers. For xAI the dashboard reads the
-> **subscription quota** ("Weekly SuperGrok Heavy Limit") from the same gRPC-Web call the
-> grok.com Usage panel uses, `grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig`, which
-> accepts the OAuth access token this service already holds and costs no tokens. That call
-> is an internal endpoint of the grok.com web app, **not a documented API** — if it changes,
-> the probe falls back to a 1-token completion against `/v1/chat/completions` and shows the
-> `x-ratelimit-*` window counters instead. Both probes run per dashboard load, per account;
-> they are skipped entirely for expired tokens.
+Tokens are written with a 5-minute client skew so consumers almost never see a
+near-dead token. Each cycle is recorded per provider and exposed at `/metrics`
+and `/status`.
 
 ## Quick start
-
-### Docker
 
 ```bash
 docker build -t oauth-token-refresher .
@@ -101,20 +66,125 @@ docker run -d --name oauth-token-refresher \
   oauth-token-refresher
 ```
 
-### Seed OpenBao manually (optional)
+Then open <http://localhost:8080> and log in — see below.
 
-Prefer the [web UI](#self-service-login-web-ui). To seed by hand instead — or to script it —
-put the credential from an OAuth login into the KV path for each provider:
+## Self-service login (web UI)
 
-**xAI** — via OMP `/login xai-oauth` (or any OAuth flow):
+Open the service in a browser and click **Log in**. The UI runs the full OAuth
+flow and writes the credential to OpenBao; the refresh loop keeps it alive
+from then on. No manual seeding required.
 
-```bash
-bao kv put secret/xai/oauth \
-  access="$ACCESS_TOKEN" refresh="$REFRESH_TOKEN" \
-  expires="$EXPIRES_MS" base_url="https://api.x.ai/v1"
+| Provider | Login flow | What you do |
+|---|---|---|
+| xAI | Device authorization | Click **Log in**, open the shown verification link, confirm the `user_code`, approve. The page completes automatically. |
+| Anthropic | Authorization code + PKCE | Click **Log in**, open the authorize link, approve, then paste the returned code back into the form. |
+| Cline (ClinePass) | Device authorization (via WorkOS) | Click **Log in**, open the shown verification link, confirm the `user_code`, approve. The page completes automatically. |
+
+> **Security — gate this.** The login UI mints provider tokens and writes
+> them to OpenBao. Expose `/`, `/login/*`, and `/session/*` **LAN-only and
+> behind SSO** (e.g. oauth2-proxy). Leave `/healthz`, `/readyz`, `/status`,
+> `/metrics` reachable in-cluster — Kubernetes probes and Prometheus scrape
+> the pod directly, so gating the UI does not break monitoring. Disable the
+> UI entirely with `LOGIN_UI_ENABLED=false`. Run single-replica (login
+> sessions are in memory).
+
+## Multiple accounts & auto-switch
+
+A provider can hold several accounts at once (e.g. three different Anthropic
+subscriptions). Exactly one is **active** — its credential is mirrored to the
+provider's live KV path, which is what your apps read.
+
+```mermaid
+flowchart TD
+    subgraph Bao["OpenBao · provider account registry"]
+        A1["account-1 · active"]
+        A2["account-2"]
+        A3["account-3"]
+    end
+    LOOP["Refresh loop"] -->|"keeps ALL accounts fresh"| Bao
+    AS["Auto-switch · optional, dashboard toggle"] -->|"probes active account quota every 5m"| Bao
+    AS -->|"active ≥80% used → hand over to the account with most headroom"| Bao
+    Bao -->|"mirror active → live path"| Live["secret/&lt;provider&gt;/oauth"]
+    Live -->|"ESO → your app"| App["Your app"]
 ```
 
-**Anthropic** — via OMP `/login anthropic` (Claude Pro/Max), then copy the credential:
+From the dashboard you can:
+
+- **Switch to** — make any account the active one right now (no re-login).
+- **Enable / Disable auto-switch** — let the refresher hand the active role
+  to the account with the most headroom before the current one runs out.
+  The preference is stored in OpenBao (survives restarts, no deployment
+  change), and always wins over the `AUTOSWITCH_PROVIDERS` default.
+- **Re-login** — re-run the OAuth flow for an existing account.
+- **Remove** — delete an account (removing the active one promotes the first
+  remaining).
+
+### How the auto-switch decision works
+
+It reads the same rate-limit signal the dashboard shows — Anthropic's 5h and
+7d subscription windows, and the xAI subscription quota — and takes the
+**highest** of them as "how used" an account is. An account with a nearly
+spent 7d budget is not mistaken for a fresh one because its 5h window happens
+to be empty.
+
+Design notes worth knowing before tuning it:
+
+- **Probing is lazy.** Only the active account is probed each pass; the
+  others are probed only once the active one crosses the trigger. Every probe
+  is a real (1-token) API call, so a "nothing to do" pass costs exactly one
+  call.
+- **Trigger well below the ceiling.** A switch is a write to OpenBao;
+  consumers only see it once their secret sync picks it up. Switching at 99%
+  hands over an account that is already failing requests.
+- **An unreadable account is never treated as a free one.** A failed probe
+  excludes that account from candidacy, and a failed probe on the *active*
+  account is not read as "spent" — neither direction may be inferred from a
+  missing measurement.
+- **When nothing has headroom** the active account is left alone and
+  `oauth_refresh_accounts_exhausted` goes to 1 (with a warning log). No amount
+  of switching fixes an exhausted set; that state is for a human.
+
+Metrics: `oauth_refresh_autoswitch_total`, `oauth_refresh_accounts_exhausted`,
+`oauth_refresh_active_account_util_percent` (all labelled by `provider`).
+
+## Providers
+
+| Provider | Enable | KV path (default) | base_url (default) |
+|---|---|---|---|
+| xAI SuperGrok | `XAI_ENABLED=true` *(default on)* | `secret/xai/oauth` | `https://api.x.ai/v1` |
+| Anthropic (Claude Pro/Max) | `ANTHROPIC_ENABLED=true` *(opt-in)* | `secret/anthropic/oauth` | `https://api.anthropic.com` |
+| Cline (ClinePass) | `CLINE_ENABLED=true` *(opt-in)* | `secret/cline/oauth` | `https://api.cline.bot/api/v1` |
+
+> **Anthropic consumption note:** the access token is a **Bearer** token for
+> the **native** Anthropic API tied to a Claude Pro/Max subscription — not an
+> API key. Your consumer must send `Authorization: Bearer <access>` **and** the
+> header `anthropic-beta: oauth-2025-04-20`. It is not an OpenAI-compatible
+> `/v1` endpoint.
+
+> **Cline consumption note:** the access token is a **WorkOS JWT** stored
+> wire-prefixed as `workos:<jwt>`. The `api.cline.bot` OpenAI-compatible
+> gateway accepts it as `Authorization: Bearer workos:<jwt>` (the prefix
+> distinguishes it from an `sk_` API key). It rotates ~hourly, so consumers
+> should read it per-request (e.g. a mounted file/callback) rather than
+> pinning it at process start. Subscription-covered `cline-pass/<model>` ids
+> bill at cost 0.
+
+> **Dashboard usage bars — where the numbers come from.** For Anthropic they
+> are the `anthropic-ratelimit-unified-*` utilization headers. For xAI the
+> dashboard reads the **subscription quota** ("Weekly SuperGrok Heavy Limit")
+> from the same gRPC-Web call the grok.com Usage panel uses,
+> `grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig`, which accepts the OAuth
+> access token this service already holds and costs no tokens. That call is an
+> internal endpoint of the grok.com web app, **not a documented API** — if it
+> changes, the probe falls back to a 1-token completion against
+> `/v1/chat/completions` and shows the `x-ratelimit-*` window counters instead.
+> Both probes run per dashboard load, per account; they are skipped entirely
+> for expired tokens.
+
+## Seed OpenBao manually (optional)
+
+Prefer the [web UI](#self-service-login-web-ui). To seed by hand instead — or
+to script it — put the credential from an OAuth login into the KV path:
 
 ```bash
 bao kv put secret/anthropic/oauth \
@@ -124,7 +194,8 @@ bao kv put secret/anthropic/oauth \
 
 - `expires`: unix **milliseconds** (number)
 - `base_url`: the API endpoint your consumer will call
-- If a refresh token is ever revoked, re-login and re-seed — no config changes needed
+- If a refresh token is ever revoked, re-login and re-seed — no config changes
+  needed
 
 ### OpenBao / Vault policy
 
@@ -157,24 +228,7 @@ All config is env-based — no config files.
 | `LISTEN_ADDR` | `:8080` | Health / metrics HTTP listener |
 | `LOGIN_UI_ENABLED` | `true` | Serve the self-service login web UI (gate it — see above) |
 
-### Automatic account switching (opt-in)
-
-A provider can hold several accounts, and normally you pick the active one by
-hand ("Switch to" in the UI). With auto-switch enabled, the refresher watches
-the active account's remaining quota and hands the active role to the account
-with the most headroom before the active one runs out.
-
-**Enable it per provider from the dashboard.** Each provider section has an
-"Enable/Disable auto-switch" button; the preference is stored in OpenBao (in
-the same registry as the account list), so it survives restarts and needs no
-deployment change. `AUTOSWITCH_PROVIDERS` is only the *default* for providers
-that have never been toggled from the dashboard — a dashboard choice always
-wins. A provider with a single account simply never switches.
-
-It reads the same rate-limit signal the dashboard shows — Anthropic's 5h and 7d
-subscription windows, and the xAI subscription quota — and takes the **highest**
-of them as "how used" an account is, so an account with a nearly spent 7d budget
-is not mistaken for a fresh one because its 5h window happens to be empty.
+### Automatic account switching
 
 | Variable | Default | Description |
 |---|---|---|
@@ -184,25 +238,6 @@ is not mistaken for a fresh one because its 5h window happens to be empty.
 | `AUTOSWITCH_MARGIN_PCT` | `15` | A candidate must be at least this much less used to be worth taking |
 | `AUTOSWITCH_COOLDOWN` | `15m` | Minimum time between switches for one provider |
 
-Design notes worth knowing before tuning it:
-
-- **Probing is lazy.** Only the active account is probed each pass; the others
-  are probed only once the active one crosses the trigger. Every probe is a real
-  (1-token) API call, so a "nothing to do" pass costs exactly one call.
-- **Trigger well below the ceiling.** A switch is a write to OpenBao; consumers
-  only see it once their secret sync picks it up. Switching at 99% hands over an
-  account that is already failing requests.
-- **An unreadable account is never treated as a free one.** A failed probe
-  excludes that account from candidacy, and a failed probe on the *active*
-  account is not read as "spent" — neither direction may be inferred from a
-  missing measurement.
-- **When nothing has headroom** the active account is left alone and
-  `oauth_refresh_accounts_exhausted` goes to 1 (with a warning log). No amount of
-  switching fixes an exhausted set; that state is for a human.
-
-Metrics: `oauth_refresh_autoswitch_total`, `oauth_refresh_accounts_exhausted`,
-`oauth_refresh_active_account_util_percent` (all labelled by `provider`).
-
 ### xAI provider
 
 | Variable | Default | Description |
@@ -211,7 +246,7 @@ Metrics: `oauth_refresh_autoswitch_total`, `oauth_refresh_accounts_exhausted`,
 | `XAI_KV_PATH` | `secret/xai/oauth` | KV v2 path (falls back to legacy `OPENBAO_KV_PATH`) |
 | `XAI_BASE_URL` | `https://api.x.ai/v1` | Written to KV as `base_url` (falls back to legacy `BASE_URL`) |
 | `XAI_ISSUER` | `https://auth.x.ai` | OIDC issuer for token-endpoint discovery |
-| `XAI_CLIENT_ID` | `b1a00492-073a-47ea-816f-4c329264a828` | SuperGrok OAuth client ID |
+| `XAI_CLIENT_ID` | `b1a00492-…` | SuperGrok OAuth client ID |
 | `XAI_SCOPE` | `openid profile email offline_access grok-cli:access api:access` | OAuth scope requested at device login |
 
 ### Anthropic provider
@@ -221,12 +256,12 @@ Metrics: `oauth_refresh_autoswitch_total`, `oauth_refresh_accounts_exhausted`,
 | `ANTHROPIC_ENABLED` | `false` | Manage the Anthropic credential |
 | `ANTHROPIC_KV_PATH` | `secret/anthropic/oauth` | KV v2 path |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Written to KV as `base_url` |
-| `ANTHROPIC_CLIENT_ID` | `9d1c250a-e61b-44d9-88ed-5944d1962f5e` | Claude Pro/Max OAuth client ID |
+| `ANTHROPIC_CLIENT_ID` | `9d1c250a-…` | Claude Pro/Max OAuth client ID |
 | `ANTHROPIC_TOKEN_URL` | `https://api.anthropic.com/v1/oauth/token` | OAuth token endpoint |
 | `ANTHROPIC_REDIRECT_URI` | `http://localhost:54545/callback` | Registered redirect URI sent during paste login |
 
-> Legacy `OPENBAO_KV_PATH` and `BASE_URL` are still honored as aliases for the xAI provider,
-> so existing deployments keep working without changes.
+> Legacy `OPENBAO_KV_PATH` and `BASE_URL` are still honored as aliases for the
+> xAI provider, so existing deployments keep working without changes.
 
 ## Health & metrics endpoints
 
@@ -236,9 +271,13 @@ Metrics: `oauth_refresh_autoswitch_total`, `oauth_refresh_accounts_exhausted`,
 | `GET /readyz` | Readiness (503 until every provider clears its first cycle) |
 | `GET /status` | JSON: per-provider `last_ok`, `last_error`, `last_refresh`, `access_expiry`, `cycles`, `errors`, `healthy`, `token_valid` |
 | `GET /metrics` | Prometheus text exposition (see below) |
+| `GET /autoswitch/{provider}` | JSON auto-switch state: `{"enabled":…,"decided":…}` |
+| `POST /autoswitch/{provider}/on` | Enable auto-switch for the provider |
+| `POST /autoswitch/{provider}/off` | Disable auto-switch for the provider |
 
-The four endpoints above are safe to leave open in-cluster. The login UI (`/`, `/login/*`,
-`/session/*`) is sensitive — see [Self-service login](#self-service-login-web-ui).
+The `/healthz`, `/readyz`, `/status`, `/metrics`, and `/autoswitch/*` endpoints
+are safe to leave open in-cluster. The login UI (`/`, `/login/*`, `/session/*`)
+is sensitive — see [Self-service login](#self-service-login-web-ui).
 
 ### Prometheus metrics
 
@@ -294,9 +333,9 @@ Stored at `secret/data/<provider>/oauth` (KV v2):
 
 ## Kubernetes deployment
 
-Run it as a single-replica Deployment that writes to OpenBao. Any Vault KV consumer can then
-materialise the credential into an application Secret — for example the
-[External Secrets Operator](https://external-secrets.io/):
+Run it as a single-replica Deployment that writes to OpenBao. Any Vault KV
+consumer can then materialise the credential into an application Secret — for
+example the [External Secrets Operator](https://external-secrets.io/):
 
 ```yaml
 apiVersion: external-secrets.io/v1
@@ -322,8 +361,9 @@ spec:
       remoteRef: { key: anthropic/oauth, property: base_url }
 ```
 
-If your app needs a restart when the Secret changes, pair it with a secret reloader, and
-renew the OpenBao service token periodically so it never expires.
+If your app needs a restart when the Secret changes, pair it with a secret
+reloader, and renew the OpenBao service token periodically so it never
+expires.
 
 ## Development
 
