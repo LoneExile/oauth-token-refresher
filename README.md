@@ -160,9 +160,16 @@ All config is env-based — no config files.
 ### Automatic account switching (opt-in)
 
 A provider can hold several accounts, and normally you pick the active one by
-hand ("Switch to" in the UI). With `AUTOSWITCH_PROVIDERS` set, the refresher
-watches the active account's remaining quota and hands the active role to the
-account with the most headroom before the active one runs out.
+hand ("Switch to" in the UI). With auto-switch enabled, the refresher watches
+the active account's remaining quota and hands the active role to the account
+with the most headroom before the active one runs out.
+
+**Enable it per provider from the dashboard.** Each provider section has an
+"Enable/Disable auto-switch" button; the preference is stored in OpenBao (in
+the same registry as the account list), so it survives restarts and needs no
+deployment change. `AUTOSWITCH_PROVIDERS` is only the *default* for providers
+that have never been toggled from the dashboard — a dashboard choice always
+wins. A provider with a single account simply never switches.
 
 It reads the same rate-limit signal the dashboard shows — Anthropic's 5h and 7d
 subscription windows, and the xAI subscription quota — and takes the **highest**
@@ -171,7 +178,7 @@ is not mistaken for a fresh one because its 5h window happens to be empty.
 
 | Variable | Default | Description |
 |---|---|---|
-| `AUTOSWITCH_PROVIDERS` | *(empty = off)* | Comma-separated providers to manage, e.g. `anthropic` |
+| `AUTOSWITCH_PROVIDERS` | *(empty = off)* | Comma-separated default providers to manage, e.g. `anthropic` (overridden by the dashboard toggle) |
 | `AUTOSWITCH_INTERVAL` | `5m` | How often to evaluate. Each pass costs one API probe per managed provider |
 | `AUTOSWITCH_TRIGGER_PCT` | `80` | Consider switching once the active account is this used |
 | `AUTOSWITCH_MARGIN_PCT` | `15` | A candidate must be at least this much less used to be worth taking |

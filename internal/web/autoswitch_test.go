@@ -230,3 +230,48 @@ func TestAutoSwitchSingleAccountIsNoop(t *testing.T) {
 		t.Errorf("probes = %d, want 0 for a single-account provider", p.probes)
 	}
 }
+
+// A dashboard toggle-OFF must win over a default that lists the provider.
+func TestAutoSwitchRegistryOffOverridesDefaultOn(t *testing.T) {
+	p := &fixedProber{byToken: map[string]oauth.Usage{
+		"tok-a": util(99, 99),
+		"tok-b": util(1, 1),
+	}}
+	m, _ := autoSwitchFixture(t, p, "a", "a", "b")
+	if err := m.SetAutoSwitch("anthropic", false); err != nil {
+		t.Fatal(err)
+	}
+
+	got := m.AutoSwitch(context.Background(), policy(), time.Now())
+	if got != nil {
+		t.Fatalf("registry-off policy returned decisions: %+v", got)
+	}
+	if p.probes != 0 {
+		t.Errorf("probes = %d, want 0 when the registry flag is off", p.probes)
+	}
+}
+
+// A dashboard toggle-ON must work even when the deployment default lists
+// nothing (the exact live scenario: AUTOSWITCH_PROVIDERS is empty).
+func TestAutoSwitchRegistryOnOverridesDefaultOff(t *testing.T) {
+	p := &fixedProber{byToken: map[string]oauth.Usage{
+		"tok-a": util(95, 40), // active, spent
+		"tok-b": util(10, 10), // headroom
+	}}
+	m, v := autoSwitchFixture(t, p, "a", "a", "b")
+	if err := m.SetAutoSwitch("anthropic", true); err != nil {
+		t.Fatal(err)
+	}
+
+	got := m.AutoSwitch(context.Background(), AutoSwitchPolicy{}, time.Now())
+	if len(got) != 1 || got[0].Action != ActionSwitched {
+		t.Fatalf("want %q with a registry-ON flag and empty default, got %+v", ActionSwitched, got)
+	}
+	if got[0].To != "b" {
+		t.Errorf("switched to %q, want \"b\"", got[0].To)
+	}
+	reg, _ := v.registry("anthropic/registry")
+	if reg.Active != "b" {
+		t.Fatalf("registry active = %q, want \"b\"", reg.Active)
+	}
+}

@@ -105,3 +105,61 @@ func TestActivateAndRemoveRoutes(t *testing.T) {
 		t.Fatal("alice should be gone after remove route")
 	}
 }
+
+func TestAutoSwitchRoutesToggleAndStatus(t *testing.T) {
+	v := newFakeVault(t)
+	bao := v.client("secret/anthropic/oauth", "https://base")
+	m := NewManager([]Provider{{Name: "anthropic", Bao: bao, Paste: &fakePaste{cred: validCred("ALICE")}}})
+	addAccount(t, m, &fakePaste{cred: validCred("ALICE")}, "anthropic", "alice", "ALICE")
+	srv := serve(t, m)
+	client := noRedirectClient()
+
+	// Status before any toggle: not decided.
+	resp, err := http.Get(srv.URL + "/autoswitch/anthropic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `"enabled":false,"decided":false`) {
+		t.Fatalf("pre-toggle status = %s", body)
+	}
+
+	// Enable via the route; registry must record it.
+	resp, err = client.PostForm(srv.URL+"/autoswitch/anthropic/on", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("enable status=%d", resp.StatusCode)
+	}
+	reg, ok := v.registry("secret/anthropic/registry")
+	if !ok || reg.AutoSwitch == nil || !*reg.AutoSwitch {
+		t.Fatalf("registry after enable: %+v ok=%v", reg, ok)
+	}
+
+	resp, err = http.Get(srv.URL + "/autoswitch/anthropic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `"enabled":true,"decided":true`) {
+		t.Fatalf("post-enable status = %s", body)
+	}
+
+	// Disable via the route; registry must flip back.
+	resp, err = client.PostForm(srv.URL+"/autoswitch/anthropic/off", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("disable status=%d", resp.StatusCode)
+	}
+	reg, ok = v.registry("secret/anthropic/registry")
+	if !ok || reg.AutoSwitch == nil || *reg.AutoSwitch {
+		t.Fatalf("registry after disable: %+v ok=%v", reg, ok)
+	}
+}

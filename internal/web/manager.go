@@ -142,10 +142,12 @@ type AccountView struct {
 
 // ProviderView is the dashboard section for one provider and its accounts.
 type ProviderView struct {
-	Name     string
-	Kind     string
-	ActiveID string
-	Accounts []AccountView
+	Name       string
+	Kind       string
+	ActiveID   string
+	AutoSwitch bool // true when a runtime preference is set AND enabled
+	AutoSet    bool // true when a runtime preference was recorded at all
+	Accounts   []AccountView
 }
 
 // Providers returns the dashboard sections, reading each account's current
@@ -166,6 +168,10 @@ func (m *Manager) Providers() []ProviderView {
 			continue
 		}
 		pv.ActiveID = reg.Active
+		if reg.AutoSwitch != nil {
+			pv.AutoSet = true
+			pv.AutoSwitch = *reg.AutoSwitch
+		}
 		for _, a := range reg.Accounts {
 			av := AccountView{ID: a.ID, Label: a.Label, Active: a.ID == reg.Active}
 			cred, cerr := p.Bao.ReadCredentialAt(ctx, p.Bao.AccountPath(a.ID))
@@ -305,6 +311,58 @@ func (m *Manager) SubmitCode(id, code string) error {
 	}
 	m.finish(id, StateAuthorized, "")
 	return nil
+}
+
+// autoSwitchEnabledLocked reads the provider's runtime auto-switch flag from
+// its registry. decided=false means no per-provider preference was ever
+// recorded, so the deployment default (AUTOSWITCH_PROVIDERS) applies. Caller
+// must hold accMu.
+func (m *Manager) autoSwitchEnabledLocked(ctx context.Context, p Provider) (enabled, decided bool) {
+	reg, err := m.ensureRegistryLocked(ctx, p)
+	if err != nil || reg.AutoSwitch == nil {
+		return false, false
+	}
+	return *reg.AutoSwitch, true
+}
+
+// AutoSwitchEnabled reports whether the provider's runtime auto-switch flag is
+// set in its registry. decided=false means no per-provider preference was ever
+// recorded, so the deployment default applies.
+func (m *Manager) AutoSwitchEnabled(provider string) (enabled, decided bool) {
+	m.accMu.Lock()
+	defer m.accMu.Unlock()
+	p, ok := m.providers[provider]
+	if !ok {
+		return false, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.autoSwitchEnabledLocked(ctx, p)
+}
+
+// SetAutoSwitch persists the provider's auto-switch preference in its registry
+// (the same store as the account list), so it survives restarts and needs no
+// deployment/manifest change. Caller must hold accMu.
+func (m *Manager) setAutoSwitchLocked(ctx context.Context, p Provider, on bool) error {
+	reg, err := m.ensureRegistryLocked(ctx, p)
+	if err != nil {
+		return err
+	}
+	reg.AutoSwitch = &on
+	return p.Bao.WriteRegistry(ctx, reg)
+}
+
+// SetAutoSwitch toggles the provider's auto-switch preference.
+func (m *Manager) SetAutoSwitch(provider string, on bool) error {
+	p, ok := m.providers[provider]
+	if !ok {
+		return fmt.Errorf("unknown provider %q", provider)
+	}
+	m.accMu.Lock()
+	defer m.accMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return m.setAutoSwitchLocked(ctx, p, on)
 }
 
 // Activate makes account id the provider's active account: its credential is

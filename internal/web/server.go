@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"fmt"
 	"html/template"
 	"net/http"
 )
@@ -13,6 +14,8 @@ import (
 //	POST /account/{provider}/{id}/relogin     re-login an existing account
 //	POST /account/{provider}/{id}/activate    make an account the active one
 //	POST /account/{provider}/{id}/remove      delete an account
+//	POST /autoswitch/{provider}/on|off        set the provider's auto-switch preference
+//	GET  /autoswitch/{provider}               current auto-switch state (JSON)
 //	GET  /session/{id}                         login progress / paste form
 //	POST /session/{id}/code                    submit a pasted authorization code
 func Register(mux *http.ServeMux, m *Manager) {
@@ -21,6 +24,9 @@ func Register(mux *http.ServeMux, m *Manager) {
 	mux.HandleFunc("POST /account/{provider}/{id}/relogin", m.handleRelogin)
 	mux.HandleFunc("POST /account/{provider}/{id}/activate", m.handleActivate)
 	mux.HandleFunc("POST /account/{provider}/{id}/remove", m.handleRemove)
+	mux.HandleFunc("GET /autoswitch/{provider}", m.handleAutoSwitchStatus)
+	mux.HandleFunc("POST /autoswitch/{provider}/on", m.handleAutoSwitchOn)
+	mux.HandleFunc("POST /autoswitch/{provider}/off", m.handleAutoSwitchOff)
 	mux.HandleFunc("GET /session/{id}", m.handleSession)
 	mux.HandleFunc("POST /session/{id}/code", m.handleCode)
 }
@@ -61,6 +67,28 @@ func (m *Manager) handleRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (m *Manager) handleAutoSwitchOn(w http.ResponseWriter, r *http.Request) {
+	if err := m.SetAutoSwitch(r.PathValue("provider"), true); err != nil {
+		renderMessage(w, "Could not enable auto-switch: "+err.Error(), true, http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (m *Manager) handleAutoSwitchOff(w http.ResponseWriter, r *http.Request) {
+	if err := m.SetAutoSwitch(r.PathValue("provider"), false); err != nil {
+		renderMessage(w, "Could not disable auto-switch: "+err.Error(), true, http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (m *Manager) handleAutoSwitchStatus(w http.ResponseWriter, r *http.Request) {
+	enabled, decided := m.AutoSwitchEnabled(r.PathValue("provider"))
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintf(w, `{"enabled":%t,"decided":%t}`, enabled, decided)
 }
 
 func (m *Manager) handleSession(w http.ResponseWriter, r *http.Request) {

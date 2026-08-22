@@ -178,10 +178,13 @@ type Account struct {
 
 // Registry is the per-provider account index stored at Base + /registry: the id
 // of the active account (whose credential is mirrored to the live path) plus
-// every known account.
+// every known account. AutoSwitch, when non-nil, is the per-provider runtime
+// auto-switch preference set from the dashboard; nil means "not decided yet —
+// fall back to the deployment default (AUTOSWITCH_PROVIDERS)".
 type Registry struct {
-	Active   string    `json:"active"`
-	Accounts []Account `json:"accounts"`
+	Active     string    `json:"active"`
+	Accounts   []Account `json:"accounts"`
+	AutoSwitch *bool     `json:"autoswitch,omitempty"`
 }
 
 // Has reports whether id is a known account.

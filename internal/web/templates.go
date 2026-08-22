@@ -161,6 +161,11 @@ main { flex: 1; max-width: 720px; width: 100%; margin: 0 auto; padding: 28px 24p
 }
 .provider-name { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--text-dim); }
 .provider-kind { font-size: 12px; color: var(--text-faint); }
+.provider-as { display: inline-flex; align-items: center; margin-left: auto; }
+.as-badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
+.as-badge.on { background: oklch(0.30 0.08 155); color: var(--green); }
+.as-badge.off { background: oklch(0.28 0.04 30); color: var(--red); }
+.as-badge.unset { background: oklch(0.28 0 0); color: var(--text-dim); }
 
 .acct {
   background: var(--surface); border: 1px solid var(--border);
@@ -177,6 +182,7 @@ main { flex: 1; max-width: 720px; width: 100%; margin: 0 auto; padding: 28px 24p
   margin-left: 6px; vertical-align: 1px;
 }
 .acct-badge.active { background: oklch(0.30 0.08 155); color: var(--green); }
+.btn-small { padding: 3px 10px; font-size: 12px; margin-left: 6px; }
 
 .token-status { font-size: 12px; margin-bottom: 6px; }
 .token-status .ok { color: var(--green); }
@@ -256,6 +262,15 @@ ol { padding-left: 20px; } li { margin: 6px 0; }
   <div class="provider-head">
     <span class="provider-name">{{$p.Name}}</span>
     <span class="provider-kind">{{$p.Kind}} flow</span>
+    <span class="provider-as">
+      {{if $p.AutoSet}}
+        {{if $p.AutoSwitch}}<span class="as-badge on">auto-switch on</span>
+        {{else}}<span class="as-badge off">auto-switch off</span>{{end}}
+      {{else}}<span class="as-badge unset">auto-switch default</span>{{end}}
+      <form method="post" action="/autoswitch/{{$p.Name}}/{{if $p.AutoSwitch}}off{{else}}on{{end}}">
+        <button class="btn btn-small" type="submit">{{if $p.AutoSwitch}}Disable auto-switch{{else}}Enable auto-switch{{end}}</button>
+      </form>
+    </span>
   </div>
   {{if $p.Accounts}}
     {{range $a := $p.Accounts}}

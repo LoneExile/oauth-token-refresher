@@ -84,15 +84,24 @@ type SwitchDecision struct {
 // secret, so the new account is perhaps a minute or two away. Switching at 99%
 // would hand over an account that is already failing requests.
 func (m *Manager) AutoSwitch(ctx context.Context, pol AutoSwitchPolicy, now time.Time) []SwitchDecision {
-	if len(pol.Providers) == 0 {
-		return nil
-	}
+	// No early return on an empty static list: the per-provider registry flag
+	// may still enable a provider from the dashboard (AUTOSWITCH_PROVIDERS is
+	// just the default). With nothing enabled the loop appends nothing and
+	// returns nil.
 	m.accMu.Lock()
 	defer m.accMu.Unlock()
 
 	var out []SwitchDecision
 	for _, name := range m.order {
-		if !pol.Enabled(name) {
+		// A runtime preference set from the dashboard wins over the static
+		// list; an unset flag falls back to the deployment default. Called
+		// under accMu (the flag lives in the registry, which the manager
+		// already serializes) — no re-lock.
+		if on, decided := m.autoSwitchEnabledLocked(ctx, m.providers[name]); decided {
+			if !on {
+				continue
+			}
+		} else if !pol.Enabled(name) {
 			continue
 		}
 		out = append(out, m.autoSwitchProviderLocked(ctx, m.providers[name], pol, now))
