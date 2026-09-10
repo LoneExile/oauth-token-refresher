@@ -10,6 +10,9 @@ func clearEnv(t *testing.T) {
 		"OPENBAO_ADDR", "OPENBAO_TOKEN", "OPENBAO_KV_PATH",
 		"XAI_ENABLED", "XAI_CLIENT_ID", "XAI_KV_PATH", "XAI_BASE_URL", "XAI_ISSUER", "BASE_URL",
 		"ANTHROPIC_ENABLED", "ANTHROPIC_KV_PATH", "ANTHROPIC_BASE_URL", "ANTHROPIC_CLIENT_ID", "ANTHROPIC_TOKEN_URL",
+		"CLINE_ENABLED", "CLINE_KV_PATH", "CLINE_BASE_URL", "CLINE_CLIENT_ID", "CLINE_WORKOS_BASE",
+		"OPENAI_CODEX_ENABLED", "OPENAI_CODEX_KV_PATH", "OPENAI_CODEX_BASE_URL",
+		"OPENAI_CODEX_CLIENT_ID", "OPENAI_CODEX_AUTH_BASE",
 		"REFRESH_SKEW", "LOOP_INTERVAL", "ONCE", "LISTEN_ADDR",
 	} {
 		t.Setenv(k, "")
@@ -98,6 +101,34 @@ func TestFromEnvAnthropicOptIn(t *testing.T) {
 	// ClientID/TokenURL default inside oauth.NewAnthropic when empty.
 	if a.ClientID != "" || a.TokenURL != "" {
 		t.Errorf("expected empty client/token overrides, got %q / %q", a.ClientID, a.TokenURL)
+	}
+}
+
+func TestFromEnvOpenAICodexOptIn(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("OPENBAO_TOKEN", "tok")
+	t.Setenv("OPENAI_CODEX_ENABLED", "true")
+	c, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := find(c, "openai-codex")
+	if p == nil {
+		t.Fatal("no openai-codex provider")
+	}
+	if p.Type != "openai-codex" {
+		t.Errorf("type=%q", p.Type)
+	}
+	if p.KVPath != "secret/openai-codex/oauth" {
+		t.Errorf("kvpath=%q", p.KVPath)
+	}
+	// The ChatGPT backend root: consumers append /codex/responses themselves.
+	if p.BaseURL != "https://chatgpt.com/backend-api" {
+		t.Errorf("baseurl=%q", p.BaseURL)
+	}
+	// ClientID/AuthBase default inside oauth.NewOpenAICodex when empty.
+	if p.ClientID != "" || p.Issuer != "" {
+		t.Errorf("expected empty client/auth-base overrides, got %q / %q", p.ClientID, p.Issuer)
 	}
 }
 

@@ -162,7 +162,7 @@ func (c *XAIClient) StartDevice(ctx context.Context) (DeviceAuth, error) {
 }
 
 // PollDevice polls the token endpoint once for the device-code grant.
-func (c *XAIClient) PollDevice(ctx context.Context, deviceCode string) (Credential, PollStatus, error) {
+func (c *XAIClient) PollDevice(ctx context.Context, auth DeviceAuth) (Credential, PollStatus, error) {
 	ep, err := c.tokenEndpoint(ctx)
 	if err != nil {
 		return Credential{}, PollPending, err
@@ -170,7 +170,7 @@ func (c *XAIClient) PollDevice(ctx context.Context, deviceCode string) (Credenti
 	form := url.Values{}
 	form.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
 	form.Set("client_id", c.ClientID)
-	form.Set("device_code", deviceCode)
+	form.Set("device_code", auth.DeviceCode)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, strings.NewReader(form.Encode()))
 	if err != nil {
 		return Credential{}, PollPending, err

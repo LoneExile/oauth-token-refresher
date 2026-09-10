@@ -195,11 +195,11 @@ func (c *ClineClient) StartDevice(ctx context.Context) (DeviceAuth, error) {
 }
 
 // PollDevice polls the WorkOS authenticate endpoint once for the device-code grant.
-func (c *ClineClient) PollDevice(ctx context.Context, deviceCode string) (Credential, PollStatus, error) {
+func (c *ClineClient) PollDevice(ctx context.Context, auth DeviceAuth) (Credential, PollStatus, error) {
 	form := url.Values{}
 	form.Set("grant_type", clineDeviceGrant)
 	form.Set("client_id", c.ClientID)
-	form.Set("device_code", deviceCode)
+	form.Set("device_code", auth.DeviceCode)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.authenticateURL(), strings.NewReader(form.Encode()))
 	if err != nil {

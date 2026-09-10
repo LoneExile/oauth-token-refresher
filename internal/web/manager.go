@@ -646,7 +646,7 @@ func (m *Manager) Session(id string) (Session, bool) {
 	return *s, true
 }
 
-// pollDevice runs the RFC 8628 poll loop until authorized, failed, or expired.
+// pollDevice runs the device-flow poll loop until authorized, failed, or expired.
 func (m *Manager) pollDevice(p Provider, id string, da oauth.DeviceAuth) {
 	interval := da.Interval
 	if interval < time.Second {
@@ -658,7 +658,7 @@ func (m *Manager) pollDevice(p Provider, id string, da oauth.DeviceAuth) {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		cred, status, err := p.Device.PollDevice(ctx, da.DeviceCode)
+		cred, status, err := p.Device.PollDevice(ctx, da)
 		cancel()
 		switch {
 		case err != nil:

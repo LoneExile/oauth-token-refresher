@@ -67,6 +67,10 @@ func main() {
 			cc := oauth.NewCline(pc.Issuer, pc.ClientID)
 			wp.Device, wp.Refresher = cc, cc
 			wp.Prober = oauth.NoOpProber{}
+		case "openai-codex":
+			oc := oauth.NewOpenAICodex(pc.Issuer, pc.ClientID)
+			wp.Device, wp.Refresher = oc, oc
+			wp.Prober = oauth.CodexProber{BaseURL: pc.BaseURL}
 		default:
 			slog.Error("unknown provider type", "provider", pc.Name, "type", pc.Type)
 			os.Exit(1)

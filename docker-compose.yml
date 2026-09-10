@@ -49,6 +49,12 @@ services:
       # Anthropic (Claude Pro/Max) — opt-in. Seed secret/anthropic/oauth first.
       # ANTHROPIC_ENABLED: "true"
       # ANTHROPIC_KV_PATH: secret/anthropic/oauth
+      # Cline (ClinePass) — opt-in, device login.
+      # CLINE_ENABLED: "true"
+      # CLINE_KV_PATH: secret/cline/oauth
+      # OpenAI Codex (ChatGPT) — opt-in, device login.
+      # OPENAI_CODEX_ENABLED: "true"
+      # OPENAI_CODEX_KV_PATH: secret/openai-codex/oauth
     depends_on:
       - openbao
 

@@ -146,11 +146,11 @@ func TestClineDeviceLogin(t *testing.T) {
 	}
 
 	// First poll: pending.
-	if _, st, err := c.PollDevice(context.Background(), "dc"); err != nil || st != PollPending {
+	if _, st, err := c.PollDevice(context.Background(), da); err != nil || st != PollPending {
 		t.Fatalf("first poll st=%v err=%v want pending", st, err)
 	}
 	// Second poll: complete.
-	cred, st, err := c.PollDevice(context.Background(), "dc")
+	cred, st, err := c.PollDevice(context.Background(), da)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,7 +54,7 @@ which account takes over:
   1-token API call). The others are probed only once the active crosses
   `AUTOSWITCH_TRIGGER_PCT`.
 - **Worst-window utilization.** An account's "used" is the highest of its
-  windows (Anthropic 5h/7d, xAI subscription quota).
+  windows (Anthropic 5h/7d, Codex 5h/weekly, xAI subscription quota).
 - **Margin + cooldown** prevent flapping between near-equal accounts.
 - **Unknown ≠ free.** A failed probe excludes an account from candidacy; a
   failed probe on the active account is never read as "spent".
@@ -74,6 +74,19 @@ the exported `AutoSwitchEnabled` (which takes its own lock) from inside
    ```go
    type Refresher interface { Refresh(ctx context.Context, refreshToken string) (Credential, error) }
    type UsageProber interface { ProbeUsage(ctx context.Context, access string) Usage }
+
+   // Login flows. PollDevice takes the whole DeviceAuth because not every
+   // provider polls with the device code alone (OpenAI Codex also sends the
+   // user code).
+   type DeviceLogin interface {
+       StartDevice(ctx context.Context) (DeviceAuth, error)
+       PollDevice(ctx context.Context, auth DeviceAuth) (Credential, PollStatus, error)
+   }
+   type PasteLogin interface {
+       RedirectURI() string
+       AuthURL(pkce PKCE, state string) string
+       ExchangeCode(ctx context.Context, code, state string, pkce PKCE) (Credential, error)
+   }
    ```
 2. **`internal/config/`** — add the `*_ENABLED`, `*_KV_PATH`, `*_BASE_URL`,
    etc. vars.

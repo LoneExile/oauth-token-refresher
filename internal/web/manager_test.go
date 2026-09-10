@@ -110,26 +110,39 @@ func (v *fakeVault) seedRegistry(logical string, reg openbao.Registry) {
 }
 
 type fakeDevice struct {
+	mu         sync.Mutex
 	interval   time.Duration
 	polls      int
 	completeAt int
 	cred       oauth.Credential
 	failErr    error
+	gotAuth    oauth.DeviceAuth
 }
 
 func (f *fakeDevice) StartDevice(context.Context) (oauth.DeviceAuth, error) {
 	return oauth.DeviceAuth{DeviceCode: "dc", UserCode: "UC-1", VerificationURIComplete: "https://verify", Interval: f.interval, ExpiresAt: time.Now().Add(time.Minute)}, nil
 }
 
-func (f *fakeDevice) PollDevice(context.Context, string) (oauth.Credential, oauth.PollStatus, error) {
+func (f *fakeDevice) PollDevice(_ context.Context, auth oauth.DeviceAuth) (oauth.Credential, oauth.PollStatus, error) {
+	f.mu.Lock()
 	f.polls++
+	f.gotAuth = auth
+	polls := f.polls
+	f.mu.Unlock()
 	if f.failErr != nil {
 		return oauth.Credential{}, oauth.PollPending, f.failErr
 	}
-	if f.polls >= f.completeAt {
+	if polls >= f.completeAt {
 		return f.cred, oauth.PollComplete, nil
 	}
 	return oauth.Credential{}, oauth.PollPending, nil
+}
+
+// auth returns the DeviceAuth of the last poll.
+func (f *fakeDevice) auth() oauth.DeviceAuth {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gotAuth
 }
 
 type fakePaste struct {
@@ -257,6 +270,12 @@ func TestDeviceLoginFlow(t *testing.T) {
 	waitState(t, m, sess.ID, StateAuthorized)
 	if c, ok := v.cred("secret/xai/oauth"); !ok || c.Access != "DAT" {
 		t.Fatalf("live=%#v ok=%v", c, ok)
+	}
+	// The poll must receive the WHOLE DeviceAuth, not just the device code:
+	// OpenAI Codex polls with the user code too, and a dropped field there
+	// looks exactly like an authorization that never completes.
+	if got := fd.auth(); got.DeviceCode != "dc" || got.UserCode != "UC-1" {
+		t.Fatalf("poll got auth=%#v, want the full device authorization", got)
 	}
 }
 

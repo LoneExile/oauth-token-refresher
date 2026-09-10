@@ -41,12 +41,13 @@ func GenerateState() (string, error) {
 type PollStatus int
 
 const (
-	PollPending  PollStatus = iota // authorization_pending — keep polling
+	PollPending  PollStatus = iota // authorization_pending (or Codex 403/404) — keep polling
 	PollSlowDown                   // slow_down — back off, then keep polling
 	PollComplete                   // tokens issued
 )
 
-// DeviceAuth is the RFC 8628 device authorization response shown to the user.
+// DeviceAuth is the device authorization shown to the user. DeviceCode is the
+// provider's poll handle (RFC 8628 device_code; OpenAI Codex's device_auth_id).
 type DeviceAuth struct {
 	DeviceCode              string
 	UserCode                string
@@ -55,13 +56,16 @@ type DeviceAuth struct {
 	ExpiresAt               time.Time
 }
 
-// DeviceLogin is the OAuth 2.0 Device Authorization Grant (RFC 8628), used by
-// providers where the user approves on a separate device (xAI).
+// DeviceLogin is a login the user approves on a separate device: the RFC 8628
+// Device Authorization Grant (xAI, Cline) or OpenAI's deviceauth pair (Codex).
 type DeviceLogin interface {
 	StartDevice(ctx context.Context) (DeviceAuth, error)
 	// PollDevice polls once. On PollComplete the Credential is valid; on
 	// PollPending/PollSlowDown it is zero and err is nil; a hard failure returns err.
-	PollDevice(ctx context.Context, deviceCode string) (Credential, PollStatus, error)
+	//
+	// It takes the whole DeviceAuth because not every provider polls with the
+	// device code alone — Codex's poll carries the user code as well.
+	PollDevice(ctx context.Context, auth DeviceAuth) (Credential, PollStatus, error)
 }
 
 // PasteLogin is an authorization-code + PKCE flow completed out-of-band: the

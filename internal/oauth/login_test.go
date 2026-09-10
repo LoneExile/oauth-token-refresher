@@ -117,14 +117,15 @@ func TestXAIPollDeviceStates(t *testing.T) {
 	})
 	defer srv.Close()
 	c := NewXAI(srv.URL, "cid")
+	da := DeviceAuth{DeviceCode: "dc", UserCode: "UC"}
 
-	if _, st, err := c.PollDevice(context.Background(), "dc"); err != nil || st != PollPending {
+	if _, st, err := c.PollDevice(context.Background(), da); err != nil || st != PollPending {
 		t.Fatalf("poll1 want pending: st=%v err=%v", st, err)
 	}
-	if _, st, err := c.PollDevice(context.Background(), "dc"); err != nil || st != PollSlowDown {
+	if _, st, err := c.PollDevice(context.Background(), da); err != nil || st != PollSlowDown {
 		t.Fatalf("poll2 want slow_down: st=%v err=%v", st, err)
 	}
-	cred, st, err := c.PollDevice(context.Background(), "dc")
+	cred, st, err := c.PollDevice(context.Background(), da)
 	if err != nil || st != PollComplete {
 		t.Fatalf("poll3 want complete: st=%v err=%v", st, err)
 	}
@@ -139,7 +140,7 @@ func TestXAIPollDeviceHardError(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "access_denied", "error_description": "user denied"})
 	})
 	defer srv.Close()
-	if _, st, err := NewXAI(srv.URL, "cid").PollDevice(context.Background(), "dc"); err == nil || st != PollPending {
+	if _, st, err := NewXAI(srv.URL, "cid").PollDevice(context.Background(), DeviceAuth{DeviceCode: "dc"}); err == nil || st != PollPending {
 		t.Fatalf("want hard error, got st=%v err=%v", st, err)
 	}
 }

@@ -1,7 +1,8 @@
 # oauth-token-refresher
 
 Keep your **LLM subscription OAuth tokens** (xAI SuperGrok, Anthropic Claude
-Pro/Max, Cline ClinePass) logged in and fresh — automatically.
+Pro/Max, Cline ClinePass, OpenAI Codex / ChatGPT) logged in and fresh —
+automatically.
 
 - **Logs you in** — a small web UI runs each provider's OAuth flow end-to-end;
   no manual token copying.
@@ -17,7 +18,7 @@ flowchart LR
         UI["Web UI · login + dashboard"]
         LOOP["Refresh loop · every 60s"]
     end
-    UI -->|"OAuth login (device / paste)"| OAuth["Provider OAuth<br/>xAI · Anthropic · Cline"]
+    UI -->|"OAuth login (device / paste)"| OAuth["Provider OAuth<br/>xAI · Anthropic · Cline · Codex"]
     LOOP -->|"refresh_token grant"| OAuth
     OAuth -->|"new access + refresh token"| Bao[("OpenBao / Vault KV")]
     UI -->|"writes your credential"| Bao
@@ -51,6 +52,7 @@ Open <http://localhost:8080> and click **Log in**.
 | xAI | Device authorization | Click **Log in**, open the link, confirm the code, approve. |
 | Anthropic | Code + PKCE (paste) | Click **Log in**, approve, paste the returned code into the form. |
 | Cline (ClinePass) | Device authorization (WorkOS) | Click **Log in**, open the link, confirm the code, approve. |
+| OpenAI Codex (ChatGPT) | Device authorization (OpenAI deviceauth) | Click **Log in**, open the link, enter the code, approve. |
 
 The refresh loop keeps every credential alive from then on.
 
@@ -87,10 +89,11 @@ From the dashboard you can:
 - **Remove** — delete an account (removing the active one promotes the next).
 
 Auto-switch reads the same rate-limit signal as the dashboard (Anthropic 5h/7d
-windows, xAI subscription quota), takes the **worst** window as "how used" an
-account is, and only hands over when a candidate is meaningfully less used
-(15-point margin) — so accounts don't flap. It probes lazily (one real API
-call per pass when nothing to do) and never treats a failed probe as "free".
+windows, Codex 5h/weekly windows, xAI subscription quota), takes the **worst**
+window as "how used" an account is, and only hands over when a candidate is
+meaningfully less used (15-point margin) — so accounts don't flap. It probes
+lazily (one real API call per pass when nothing to do) and never treats a
+failed probe as "free".
 
 ## Configuration
 
@@ -132,6 +135,16 @@ All config is env-based — no config files.
 | `ANTHROPIC_CLIENT_ID` | `9d1c250a-…` | Claude Pro/Max OAuth client ID |
 | `ANTHROPIC_TOKEN_URL` | `https://api.anthropic.com/v1/oauth/token` | OAuth token endpoint |
 | `ANTHROPIC_REDIRECT_URI` | `http://localhost:54545/callback` | Registered redirect URI (paste login) |
+| `CLINE_ENABLED` | `false` | Manage the Cline (ClinePass) credential |
+| `CLINE_KV_PATH` | `secret/cline/oauth` | KV v2 path |
+| `CLINE_BASE_URL` | `https://api.cline.bot/api/v1` | Written to KV as `base_url` |
+| `CLINE_CLIENT_ID` | `client_01K3A…` | ClinePass WorkOS client ID |
+| `CLINE_WORKOS_BASE` | `https://api.workos.com` | WorkOS User Management API base |
+| `OPENAI_CODEX_ENABLED` | `false` | Manage the OpenAI Codex (ChatGPT) credential |
+| `OPENAI_CODEX_KV_PATH` | `secret/openai-codex/oauth` | KV v2 path |
+| `OPENAI_CODEX_BASE_URL` | `https://chatgpt.com/backend-api` | Written to KV as `base_url` |
+| `OPENAI_CODEX_CLIENT_ID` | `app_EMoamEEZ…` | Codex CLI OAuth client ID |
+| `OPENAI_CODEX_AUTH_BASE` | `https://auth.openai.com` | Host serving the token + deviceauth endpoints |
 
 > Legacy `OPENBAO_KV_PATH` / `BASE_URL` are honored as aliases for xAI.
 
@@ -169,6 +182,12 @@ spec:
   verbatim as the Bearer token. It rotates ~hourly — read it per-request, don't
   pin it at process start.
 - **xAI**: `Authorization: Bearer <access>` against `XAI_BASE_URL`.
+- **OpenAI Codex**: a ChatGPT OAuth JWT. Call
+  `<base_url>/codex/responses` with `Authorization: Bearer <access>`,
+  `chatgpt-account-id: <chatgpt_account_id>` (read from the token's
+  `https://api.openai.com/auth` JWT claim — it is not stored separately) and
+  `OpenAI-Beta: responses=experimental`. It is the Codex Responses API, not an
+  OpenAI-compatible `/v1` endpoint.
 
 ## Endpoints
 
@@ -204,6 +223,10 @@ path "secret/data/xai/*"          { capabilities = ["create", "read", "update"] 
 path "secret/metadata/xai/*"      { capabilities = ["read", "list", "delete"] }
 path "secret/data/anthropic/*"    { capabilities = ["create", "read", "update"] }
 path "secret/metadata/anthropic/*"{ capabilities = ["read", "list", "delete"] }
+path "secret/data/cline/*"        { capabilities = ["create", "read", "update"] }
+path "secret/metadata/cline/*"    { capabilities = ["read", "list", "delete"] }
+path "secret/data/openai-codex/*"     { capabilities = ["create", "read", "update"] }
+path "secret/metadata/openai-codex/*" { capabilities = ["read", "list", "delete"] }
 ```
 
 Create a periodic service token so it never expires (renew separately):

@@ -12,12 +12,14 @@ import (
 // provider has its own OpenBao KV path and base_url so multiple credentials can
 // be kept fresh by a single process.
 type ProviderConfig struct {
-	Name    string // metric label + log field, e.g. "xai" or "anthropic"
-	Type    string // refresher implementation: "xai" (OIDC) or "anthropic"
+	Name    string // metric label + log field, e.g. "xai" or "openai-codex"
+	Type    string // refresher implementation: "xai", "anthropic", "cline", "openai-codex"
 	KVPath  string // KV v2 path without /data/, e.g. secret/xai/oauth
 	BaseURL string // written to KV as base_url for consumers
 
-	// xAI (OIDC discovery + device login) fields.
+	// Issuer is the provider's auth host: the OIDC issuer (xAI), the WorkOS
+	// API base (Cline), or the OAuth host serving token + deviceauth
+	// (openai-codex). Empty uses the provider default.
 	Issuer string
 	Scope  string // device-login scope; empty uses the provider default
 
@@ -128,8 +130,23 @@ func FromEnv() (Config, error) {
 		})
 	}
 
+	// OpenAI Codex (ChatGPT subscription) — opt-in. OpenAI's deviceauth login +
+	// form refresh. Client ID / auth host default inside oauth.NewOpenAICodex
+	// when left empty. The base URL is the ChatGPT backend root; consumers
+	// append /codex/responses and read chatgpt-account-id from the JWT.
+	if boolEnv("OPENAI_CODEX_ENABLED", false) {
+		c.Providers = append(c.Providers, ProviderConfig{
+			Name:     "openai-codex",
+			Type:     "openai-codex",
+			KVPath:   env("OPENAI_CODEX_KV_PATH", "secret/openai-codex/oauth"),
+			BaseURL:  env("OPENAI_CODEX_BASE_URL", "https://chatgpt.com/backend-api"),
+			Issuer:   os.Getenv("OPENAI_CODEX_AUTH_BASE"),
+			ClientID: os.Getenv("OPENAI_CODEX_CLIENT_ID"),
+		})
+	}
+
 	if len(c.Providers) == 0 {
-		return c, fmt.Errorf("no providers enabled (set XAI_ENABLED=true or ANTHROPIC_ENABLED=true)")
+		return c, fmt.Errorf("no providers enabled (set XAI_ENABLED / ANTHROPIC_ENABLED / CLINE_ENABLED / OPENAI_CODEX_ENABLED)")
 	}
 	return c, nil
 }
