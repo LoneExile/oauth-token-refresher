@@ -427,7 +427,8 @@ func (m *Manager) activateLocked(ctx context.Context, p Provider, id string) err
 }
 
 // RemoveAccount deletes account id from OpenBao and the registry. Removing the
-// active account promotes the first remaining account (and mirrors it to live).
+// active account promotes the first remaining account (and mirrors it to live);
+// removing the last account also deletes the live credential.
 func (m *Manager) RemoveAccount(provider, id string) error {
 	p, ok := m.providers[provider]
 	if !ok {
@@ -455,6 +456,18 @@ func (m *Manager) RemoveAccount(provider, id string) error {
 			if cred, rerr := p.Bao.ReadCredentialAt(ctx, p.Bao.AccountPath(reg.Active)); rerr == nil {
 				_ = p.Bao.WriteCredential(ctx, cred)
 			}
+		}
+	}
+	// No accounts left means no live credential either. ensureRegistryLocked
+	// adopts any live credential it finds under an empty registry as "default",
+	// so a leftover would bring the removed account straight back on the next
+	// refresh cycle. Delete it BEFORE writing the registry: on failure the
+	// registry still lists the account and a retry of Remove finishes the job,
+	// whereas the opposite order would strand an empty registry beside a live
+	// credential, which is exactly the state that resurrects.
+	if len(reg.Accounts) == 0 {
+		if err := p.Bao.DeleteAt(ctx, p.Bao.KVPath); err != nil {
+			return err
 		}
 	}
 	if err := p.Bao.WriteRegistry(ctx, reg); err != nil {

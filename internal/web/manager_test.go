@@ -391,6 +391,43 @@ func TestRemoveActiveAccountPromotes(t *testing.T) {
 	}
 }
 
+// Removing the LAST account must also drop the live credential. Otherwise the
+// next refresh cycle's legacy migration (ensureRegistryLocked) adopts the
+// leftover live credential straight back as "default", and the account the
+// operator just removed reappears within seconds (seen on openai-codex).
+func TestRemoveLastAccountStaysRemoved(t *testing.T) {
+	v := newFakeVault(t)
+	bao := v.client("secret/anthropic/oauth", "https://base")
+	fp := &fakePaste{}
+	m := NewManager([]Provider{{Name: "anthropic", Bao: bao, Paste: fp}})
+
+	alice := addAccount(t, m, fp, "anthropic", "alice", "ALICE")
+	if _, ok := v.cred("secret/anthropic/oauth"); !ok {
+		t.Fatal("precondition: active account must be mirrored to the live path")
+	}
+
+	if err := m.RemoveAccount("anthropic", alice); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := v.cred("secret/anthropic/oauth"); ok {
+		t.Error("live credential must be deleted together with the last account")
+	}
+
+	// Several cycles, as in production: the account must not come back.
+	for i := range 3 {
+		res := m.RefreshAll(context.Background(), time.Minute)
+		if len(res) != 1 || !errors.Is(res[0].Err, errNoAccounts) {
+			t.Fatalf("cycle %d: want errNoAccounts, got %#v", i, res)
+		}
+	}
+	if reg, _ := v.registry("secret/anthropic/registry"); len(reg.Accounts) != 0 || reg.Active != "" {
+		t.Fatalf("removed account resurrected: registry=%#v", reg)
+	}
+	if views := m.Providers(); len(views) != 1 || len(views[0].Accounts) != 0 {
+		t.Fatalf("dashboard still lists an account: %#v", views)
+	}
+}
+
 func TestRefreshAllRefreshesEveryAccountAndMirrorsActive(t *testing.T) {
 	v := newFakeVault(t)
 	bao := v.client("secret/anthropic/oauth", "https://base")
